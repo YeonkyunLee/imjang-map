@@ -117,6 +117,21 @@ button, input, select { font: inherit; color: inherit; }
 .md a.missing { color: var(--muted); text-decoration: line-through dotted; }
 .md code { background: var(--chip); padding: 0 4px; border-radius: 4px; }
 
+.btn.sm { padding: 2px 8px; font-size: 12px; font-weight: 400; }
+.btn:disabled { opacity: .4; }
+
+/* route */
+#routebar { position: fixed; top: calc(58px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 960;
+  width: min(440px, calc(100% - 24px)); display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 12px;
+  background: var(--bg); box-shadow: var(--shadow); font-size: 14px; }
+#route-text { flex: 1; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#routebar:not([hidden]) ~ #status { top: calc(112px + env(safe-area-inset-top)); }
+.stop-num { background: #111827; color: #fff; border-radius: 50%; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.stop-num.cur { background: #d93025; }
+.failed { margin-top: 12px; padding: 8px; border-radius: 8px; background: #fef3c7; color: #78350f; }
+.failed ul { padding-left: 18px; margin: 6px 0; }
+.failed .sub { font-size: 12px; opacity: .8; }
+
 /* editing */
 .edit { border-top: 1px solid var(--line); padding: 10px 0 12px; display: grid; gap: 8px; }
 .seg { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
