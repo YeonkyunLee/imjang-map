@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2937">
+<title>임장 지도</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="map"></div>
+
+<header id="topbar">
+  <button id="btn-list" title="목록">☰</button>
+  <div id="title">임장 지도 <span id="count"></span></div>
+  <button id="btn-filter" title="필터">필터</button>
+  <button id="btn-locate" title="내 위치">◎</button>
+  <button id="btn-settings" title="설정">⚙</button>
+</header>
+<div id="status" hidden></div>
+
+<section id="panel-filter" class="panel" hidden>
+  <div id="filter-groups"></div>
+  <button id="filter-reset" class="btn">필터 초기화</button>
+</section>
+
+<section id="panel-list" class="panel" hidden>
+  <input id="search" type="search" placeholder="이름·주소 검색">
+  <div id="list-body"></div>
+</section>
+
+<section id="panel-settings" class="panel" hidden>
+  <form id="settings-form">
+    <label>데이터 출처
+      <select name="source">
+        <option value="github">GitHub (private 저장소)</option>
+        <option value="local">로컬 개발 서버 (dev.py)</option>
+      </select>
+    </label>
+    <label>저장소 <input name="repo" placeholder="YeonkyunLee/imjang" autocomplete="off"></label>
+    <label>브랜치 <input name="branch" placeholder="main" autocomplete="off"></label>
+    <label>GitHub 토큰 <input name="token" type="password" placeholder="github_pat_…" autocomplete="off"></label>
+    <p class="hint">fine-grained 토큰, imjang 저장소 하나에 Contents 권한만. 이 브라우저에만 저장됩니다.</p>
+    <div class="row">
+      <button type="submit" class="btn primary">저장하고 다시 불러오기</button>
+      <button type="button" id="cache-clear" class="btn">캐시 지우기</button>
+    </div>
+  </form>
+  <div id="load-info"></div>
+</section>
+
+<section id="sheet" hidden>
+  <div class="sheet-head">
+    <button id="sheet-expand" class="grip" title="크게/작게"></button>
+    <button id="sheet-close" title="닫기">✕</button>
+  </div>
+  <div id="sheet-body"></div>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
