@@ -50,6 +50,31 @@
   <div id="load-info"></div>
 </section>
 
+<section id="panel-new" class="panel" hidden>
+  <h3>새 장소</h3>
+  <form id="new-form">
+    <label>이름 <input name="name" required autocomplete="off" placeholder="단지명 또는 구역명"></label>
+    <label>지역 <input name="region" required list="region-list" autocomplete="off" placeholder="기존 지역 또는 새 지역"></label>
+    <datalist id="region-list"></datalist>
+    <label>유형
+      <select name="type"><option>아파트</option><option>재건축</option><option>재개발구역</option><option>도시형생활주택</option><option>미확인</option></select>
+    </label>
+    <label>주소 <input name="addr" autocomplete="off" placeholder="모르면 비움"></label>
+    <label>첫 메모 <textarea name="memo" rows="2" placeholder="선택"></textarea></label>
+    <p class="hint" id="new-ll"></p>
+    <div class="row">
+      <button type="submit" class="btn primary">추가</button>
+      <button type="button" id="new-cancel" class="btn">취소</button>
+    </div>
+  </form>
+</section>
+
+<div id="pickbar" hidden>
+  <span id="pick-text"></span>
+  <button id="pick-gps" class="btn">내 위치로</button>
+  <button id="pick-cancel" class="btn">취소</button>
+</div>
+
 <section id="sheet" hidden>
   <div class="sheet-head">
     <button id="sheet-expand" class="grip" title="크게/작게"></button>

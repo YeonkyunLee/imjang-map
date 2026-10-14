@@ -25,7 +25,19 @@ const cfg = Object.assign(
 );
 const cacheKey = () => `notes:${cfg.source}:${cfg.repo}:${cfg.branch}`;
 
-// ---------- 데이터 출처: list() → [{path, sha}], read(entry) → text ----------
+// ---------- 데이터 출처 ----------
+// list() → [{path, sha}] · read(entry) → text
+// fetchOne(path) → {sha, text} | null · write(path, text, baseSha, message) → newSha (충돌 시 e.conflict)
+const encPath = p => p.split('/').map(encodeURIComponent).join('/');
+const conflict = () => Object.assign(new Error('다른 곳에서 먼저 수정됨'), { conflict: true });
+function b64(s) {
+  const b = new TextEncoder().encode(s);
+  let bin = '';
+  for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+const unb64 = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\s/g, '')), c => c.charCodeAt(0)));
+
 const sources = {
   local: {
     async list() {
@@ -34,9 +46,21 @@ const sources = {
       return r.json();
     },
     async read(e) {
-      const r = await fetch('local/' + e.path.split('/').map(encodeURIComponent).join('/'), { cache: 'no-store' });
+      const r = await fetch('local/' + encPath(e.path), { cache: 'no-store' });
       if (!r.ok) throw new Error(`${e.path} 읽기 실패 (${r.status})`);
       return r.text();
+    },
+    async fetchOne(path) {
+      const r = await fetch('local/' + encPath(path), { cache: 'no-store' });
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`${path} 읽기 실패 (${r.status})`);
+      return { sha: r.headers.get('X-Sha'), text: await r.text() };
+    },
+    async write(path, text, sha) {
+      const r = await fetch('local/' + encPath(path), { method: 'PUT', headers: { 'X-Base-Sha': sha || '' }, body: text });
+      if (r.status === 409) throw conflict();
+      if (!r.ok) throw new Error(`저장 실패 (${r.status})`);
+      return (await r.json()).sha;
     },
   },
   github: {
@@ -60,8 +84,101 @@ const sources = {
       if (!r.ok) throw new Error(`${e.path} 읽기 실패 (${r.status})`);
       return r.text();
     },
+    contentsUrl: path => `https://api.github.com/repos/${cfg.repo}/contents/${encPath(path)}`,
+    async fetchOne(path) {
+      const r = await fetch(`${this.contentsUrl(path)}?ref=${encodeURIComponent(cfg.branch)}`, { headers: this.headers(), cache: 'no-store' });
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`${path} 읽기 실패 (${r.status})`);
+      const j = await r.json();
+      return { sha: j.sha, text: unb64(j.content) };
+    },
+    async write(path, text, sha, message) {
+      const r = await fetch(this.contentsUrl(path), {
+        method: 'PUT',
+        headers: this.headers(),
+        body: JSON.stringify({ message, content: b64(text), branch: cfg.branch, ...(sha ? { sha } : {}) }),
+      });
+      if (r.status === 409 || r.status === 422) throw conflict();
+      if (!r.ok) throw new Error(`저장 실패 (${r.status}${r.status === 403 || r.status === 404 ? ' — 토큰에 Contents 쓰기 권한 확인' : ''})`);
+      return (await r.json()).content.sha;
+    },
   },
 };
+
+// ---------- 노트 수정 (텍스트 → 텍스트 변환) ----------
+const today = () => new Date().toLocaleDateString('sv-SE');
+const nowHM = () => new Date().toTimeString().slice(0, 5);
+const eolOf = t => (t.includes('\r\n') ? '\r\n' : '\n');
+
+function setFields(text, fields) {
+  const eol = eolOf(text);
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const lines = m ? m[1].split(/\r?\n/) : [];
+  for (const [k, v] of Object.entries(fields)) {
+    const line = v === '' || v == null ? `${k}:` : `${k}: ${v}`;
+    const i = lines.findIndex(l => l.startsWith(k + ':'));
+    if (i >= 0) lines[i] = line; else lines.push(line);
+  }
+  const fm = `---${eol}${lines.join(eol)}${eol}---`;
+  return m ? fm + text.slice(m[0].length) : fm + eol + text;
+}
+
+function addMemo(text, memo) {
+  const eol = eolOf(text);
+  const entry = `- ${today()} ${nowHM()} ${memo.trim().split(/\r?\n/).join(eol + '  ')}`;
+  const lines = text.split(/\r?\n/);
+  const s = lines.findIndex(l => /^##\s+임장 메모\s*$/.test(l));
+  if (s < 0) return `${text.replace(/\s*$/, '')}${eol}${eol}## 임장 메모${eol}${entry}${eol}`;
+  let e = lines.findIndex((l, i) => i > s && /^#{1,2}\s/.test(l));
+  if (e < 0) e = lines.length;
+  for (let i = e - 1; i > s; i--) if (/^-\s*\(현장 느낌 추가\)\s*$/.test(lines[i])) { lines.splice(i, 1); e--; }
+  let at = e;
+  while (at - 1 > s && lines[at - 1].trim() === '') at--;
+  lines.splice(at, 0, entry);
+  return lines.join(eol);
+}
+
+const fmtLL = ll => `[${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}]`;
+
+function newNoteText({ name, region, type, addr, ll, memo }) {
+  return [
+    '---', `tags: [임장, ${region}]`, `지역: ${region}`, `유형: ${type}`, '상태: 계획', '평가:',
+    `주소: ${addr}`.trimEnd(), ll ? `location: ${fmtLL(ll)}` : 'location:',
+    '준공:', '세대:', '시세:', '시세평형:', `조사일: ${today()}`, '방문일:', '---', '',
+    `# ${name}`, '', '## 임장 메모', `- ${today()} ${nowHM()} ${memo?.trim() || '앱에서 등록'}`, '',
+  ].join('\n');
+}
+
+// 현재 버전에 fn을 적용해 커밋. 충돌이면 최신본을 받아 한 번 더 적용.
+async function editNote(path, fn, message) {
+  const src = sources[cfg.source];
+  let cur = raw[path];
+  for (let attempt = 0; ; attempt++) {
+    const text = fn(cur.text);
+    if (text === cur.text) return;
+    try {
+      raw[path] = { sha: await src.write(path, text, cur.sha, message), text };
+      break;
+    } catch (e) {
+      if (!e.conflict || attempt) throw e;
+      cur = await src.fetchOne(path);
+      if (!cur) throw new Error('노트가 저장소에서 삭제됨');
+    }
+  }
+  afterWrite();
+}
+
+async function createNote(path, text, message) {
+  const src = sources[cfg.source];
+  if (raw[path] || await src.fetchOne(path)) throw new Error('같은 이름의 노트가 이미 있음');
+  raw[path] = { sha: await src.write(path, text, null, message), text };
+  afterWrite();
+}
+
+function afterWrite() {
+  store.set(cacheKey(), raw);
+  render(raw, `${new Date().toLocaleString()} 저장`, false);
+}
 
 async function pool(items, n, fn) {
   let i = 0;
@@ -94,6 +211,7 @@ function parseNote(path, text) {
 }
 
 // ---------- 상태 ----------
+let raw = {}; // path → {sha, text}
 let notes = [];
 const byName = new Map();
 let markers = new Map(); // name → marker
@@ -156,18 +274,18 @@ function focus(ll) {
 }
 
 // ---------- 패널 ----------
-const panels = { filter: '#panel-filter', list: '#panel-list', settings: '#panel-settings' };
+const panels = { filter: '#panel-filter', list: '#panel-list', settings: '#panel-settings', new: '#panel-new' };
 function togglePanel(name, force) {
   for (const [k, sel] of Object.entries(panels)) {
     const open = k === name ? (force ?? $(sel).hidden) : false;
     $(sel).hidden = !open;
-    $(`#btn-${k}`).classList.toggle('on', open);
+    $(`#btn-${k}`)?.classList.toggle('on', open);
   }
 }
 $('#btn-filter').onclick = () => togglePanel('filter');
 $('#btn-list').onclick = () => togglePanel('list');
 $('#btn-settings').onclick = () => togglePanel('settings');
-map.on('click', () => togglePanel(null));
+map.on('click', e => (picking ? pickAt([e.latlng.lat, e.latlng.lng]) : togglePanel(null)));
 
 function drawFilters() {
   const all = places();
@@ -239,11 +357,23 @@ function renderMd(body, selfName) {
   return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: false }), { ADD_ATTR: ['data-note', 'target'] });
 }
 
-function showNote(name) {
+function editHtml(n) {
+  const seg = (k, opts, cur) => `<div class="seg" data-field="${k}"><span class="k">${k}</span>${opts.map(o =>
+    `<button data-v="${esc(o)}" class="${o === cur || (o === '없음' && !cur) ? 'on' : ''}">${esc(o)}</button>`).join('')}</div>`;
+  return `<div class="edit">
+    ${seg('상태', FILTERS.상태, n.fm.상태)}
+    ${seg('평가', ['1순위', '추천', '후보', '탈락', '없음'], n.fm.평가)}
+    <div class="memo"><textarea rows="2" placeholder="현장 메모 (시각과 함께 임장 메모에 추가)"></textarea>
+      <button class="btn primary" data-act="memo">저장</button></div>
+  </div>`;
+}
+
+function showNote(name, doFocus = true) {
   const n = byName.get(name);
   if (!n) { if (notes.length) setStatus(`노트 없음: ${name}`, true); return; }
   const f = n.fm;
-  const facts = [f.준공 && `${f.준공}년`, f.세대 && `${Number(f.세대).toLocaleString()}세대`, f.시세 && `${f.시세평형 || ''} ${f.시세}억`.trim()].filter(Boolean);
+  const facts = [f.준공 && `${f.준공}년`, f.세대 && `${Number(f.세대).toLocaleString()}세대`, f.시세 && `${f.시세평형 || ''} ${f.시세}억`.trim(),
+    f.방문일 && `방문 ${f.방문일 instanceof Date ? f.방문일.toISOString().slice(0, 10) : f.방문일}`].filter(Boolean);
   const badges = n.isPlace ? [f.유형, f.상태, n.rating].filter(Boolean) : ['노트'];
   const q = encodeURIComponent(n.name);
   const acts = [
@@ -251,6 +381,7 @@ function showNote(name) {
     n.ll && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/to/${q},${n.ll[0]},${n.ll[1]}">길찾기</a>`,
     n.isPlace && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/search/${encodeURIComponent(f.주소 ? String(f.주소).replace(/\s*\(.*\)$/, '') : n.name)}">카카오맵 검색</a>`,
     n.isPlace && `<a class="btn" target="_blank" rel="noopener" href="https://m.land.naver.com/search/result/${q}">네이버부동산</a>`,
+    n.isPlace && `<button class="btn" data-act="pick">${n.ll ? '위치 수정' : '위치 지정'}</button>`,
   ].filter(Boolean);
   $('#sheet-body').innerHTML = `
     <h2>${esc(n.name)}</h2>
@@ -260,18 +391,121 @@ function showNote(name) {
     ${facts.length ? `<div class="facts">${esc(facts.join(' · '))}</div>` : ''}
     ${f.주소 ? `<div class="addr">${esc(f.주소)}</div>` : ''}
     ${acts.length ? `<div class="actions">${acts.join('')}</div>` : ''}
+    ${n.isPlace ? editHtml(n) : ''}
     <div class="md">${renderMd(n.body, n.name)}</div>`;
-  $('#sheet-body').scrollTop = 0;
+  if (doFocus) $('#sheet-body').scrollTop = 0;
   $('#sheet-body').querySelectorAll('.md a[href^="http"]').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
   $('#sheet').hidden = false;
-  if (n.ll) focus(n.ll);
+  if (n.ll && doFocus) focus(n.ll);
 }
-$('#sheet-body').onclick = e => {
+
+const currentNote = () => byName.get(decodeURIComponent(location.hash.match(/^#note=(.+)$/)?.[1] || ''));
+
+async function save(n, fn, message, okMsg) {
+  const box = $('#sheet-body .edit');
+  box?.classList.add('busy');
+  setStatus('저장 중…');
+  try {
+    await editNote(n.path, fn, `앱: ${n.name} ${message}`);
+    setStatus(okMsg || '저장됨');
+    return true;
+  } catch (err) {
+    setStatus(err.message, true);
+    return false;
+  } finally {
+    box?.classList.remove('busy');
+  }
+}
+
+$('#sheet-body').onclick = async e => {
   const a = e.target.closest('a.wl');
   if (a) { e.preventDefault(); if (!a.classList.contains('missing')) nav(a.dataset.note); return; }
-  if (e.target.closest('[data-act="focus"]')) {
-    const n = byName.get(decodeURIComponent(location.hash.slice(6)));
-    if (n?.ll) focus(n.ll);
+  const n = currentNote();
+  if (!n) return;
+  const act = e.target.closest('[data-act]')?.dataset.act;
+  if (act === 'focus' && n.ll) focus(n.ll);
+  if (act === 'pick') startPick(n);
+  if (act === 'memo') {
+    const ta = $('#sheet-body .memo textarea');
+    if (!ta.value.trim()) return;
+    const memo = ta.value;
+    if (await save(n, t => addMemo(t, memo), '메모', '메모 저장됨')) showNote(n.name, false);
+  }
+  const segBtn = e.target.closest('.seg button');
+  if (segBtn) {
+    const k = segBtn.parentElement.dataset.field;
+    const v = segBtn.dataset.v === '없음' ? '' : segBtn.dataset.v;
+    if ((n.fm[k] || '') === v) return;
+    const fields = { [k]: v };
+    if (k === '상태' && v === '다녀옴' && !n.fm.방문일) fields.방문일 = today();
+    await save(n, t => setFields(t, fields), `${k} ${v || '비움'}`);
+  }
+};
+
+// ---------- 위치 지정 ----------
+let picking = null;
+function startPick(n) {
+  picking = n;
+  $('#sheet').hidden = true;
+  $('#pick-text').textContent = `${n.name}: 지도에서 위치를 누르세요`;
+  $('#pickbar').hidden = false;
+  document.body.classList.add('picking');
+}
+function endPick() {
+  picking = null;
+  $('#pickbar').hidden = true;
+  document.body.classList.remove('picking');
+  route();
+}
+async function pickAt(ll) {
+  const n = picking;
+  endPick();
+  if (await save(n, t => setFields(t, { location: fmtLL(ll) }), '위치', '위치 저장됨')) showNote(n.name);
+}
+$('#pick-cancel').onclick = endPick;
+$('#pick-gps').onclick = () => {
+  setStatus('위치 찾는 중…');
+  navigator.geolocation.getCurrentPosition(
+    p => pickAt([p.coords.latitude, p.coords.longitude]),
+    err => setStatus(`위치 실패: ${err.message}`, true),
+    { enableHighAccuracy: true, timeout: 15000 },
+  );
+};
+
+// ---------- 새 장소 (지도 길게 누르기) ----------
+let newLL = null;
+map.on('contextmenu', e => {
+  if (picking) return;
+  newLL = [e.latlng.lat, e.latlng.lng];
+  const f = $('#new-form');
+  f.reset();
+  const cur = currentNote();
+  f.elements.region.value = cur?.region || [...filters.지역][0] || '';
+  $('#region-list').innerHTML = FILTERS.지역.map(r => `<option value="${esc(r)}">`).join('');
+  $('#new-ll').textContent = `좌표 ${fmtLL(newLL)}`;
+  togglePanel('new', true);
+  f.elements.name.focus();
+});
+$('#new-cancel').onclick = () => togglePanel(null);
+$('#new-form').onsubmit = async e => {
+  e.preventDefault();
+  const el = e.target.elements;
+  const clean = s => s.trim().replace(/[\\/:*?"<>|#^[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+  const name = clean(el.name.value), region = clean(el.region.value);
+  if (!name || !region) return;
+  if (byName.has(name)) { setStatus('같은 이름의 노트가 이미 있음', true); return; }
+  const btn = e.submitter; btn && (btn.disabled = true);
+  setStatus('저장 중…');
+  try {
+    const text = newNoteText({ name, region, type: el.type.value, addr: el.addr.value.trim(), ll: newLL, memo: el.memo.value });
+    await createNote(`${region}/${name}.md`, text, `앱: ${name} 추가`);
+    togglePanel(null);
+    setStatus('추가됨');
+    nav(name);
+  } catch (err) {
+    setStatus(err.message, true);
+  } finally {
+    btn && (btn.disabled = false);
   }
 };
 
@@ -313,7 +547,8 @@ function setStatus(msg, isError) {
 // ---------- 불러오기 ----------
 function refresh() { drawFilters(); drawMarkers(); drawList(); }
 
-function render(raw, info) {
+function render(data, info, doRoute = true) {
+  raw = data;
   notes = Object.entries(raw).map(([p, v]) => parseNote(p, v.text));
   byName.clear();
   for (const n of notes) byName.set(n.name, n);
@@ -322,7 +557,8 @@ function render(raw, info) {
   const errs = notes.filter(n => n.error);
   $('#load-info').innerHTML = `${esc(info)}<br>노트 ${notes.length} · 장소 ${ps.length} · 좌표 없음 ${ps.filter(n => !n.ll).length}`
     + (errs.length ? `<br>frontmatter 오류: ${errs.map(n => esc(n.path)).join(', ')}` : '');
-  route();
+  if (doRoute) route();
+  else if (currentNote() && !$('#sheet').hidden) showNote(currentNote().name, false);
 }
 
 async function load() {
@@ -342,7 +578,7 @@ async function load() {
       setStatus(`불러오는 중… ${++done}/${todo.length}`);
     });
     const saved = store.set(key, next);
-    render(next, `${new Date().toLocaleString()} 갱신 (${todo.length}개 새로 받음)${saved ? '' : ' · 캐시 저장 실패'}`);
+    render(next, `${new Date().toLocaleString()} 갱신 (${todo.length}개 새로 받음)${saved ? '' : ' · 캐시 저장 실패'}`, !Object.keys(cached).length);
     setStatus(todo.length ? `${todo.length}개 노트 갱신` : '최신 상태');
   } catch (err) {
     setStatus(err.message + (Object.keys(cached).length ? ' — 캐시 표시 중' : ''), true);

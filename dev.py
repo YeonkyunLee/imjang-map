@@ -16,31 +16,58 @@ APP = Path(__file__).resolve().parent
 DEFAULT_NOTES = Path.home() / "Documents" / "Ian_obsidian" / "임장"
 
 
+def sha_of(p: Path) -> str:
+    """GitHub blob sha 대신 쓰는 버전 표시 (수정시각-크기)."""
+    st = p.stat()
+    return f"{st.st_mtime_ns}-{st.st_size}"
+
+
 def make_handler(notes: Path):
     class Handler(SimpleHTTPRequestHandler):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, directory=str(APP), **kwargs)
 
-        def do_GET(self):
+        def _note(self):
+            """/local/<path> → 노트 폴더 안의 .md 경로, 아니면 None."""
             path = unquote(urlsplit(self.path).path)
-            if path == "/local/index.json":
+            if not path.startswith("/local/"):
+                return None
+            f = (notes / path[len("/local/"):]).resolve()
+            return f if notes in f.parents and f.suffix == ".md" else None
+
+        def do_GET(self):
+            if unquote(urlsplit(self.path).path) == "/local/index.json":
                 items = [
-                    {"path": p.relative_to(notes).as_posix(), "sha": f"{p.stat().st_mtime_ns}-{p.stat().st_size}"}
+                    {"path": p.relative_to(notes).as_posix(), "sha": sha_of(p)}
                     for p in sorted(notes.rglob("*.md"))
                     if ".git" not in p.parts
                 ]
                 return self._send(json.dumps(items, ensure_ascii=False).encode(), "application/json; charset=utf-8")
-            if path.startswith("/local/"):
-                f = (notes / path[len("/local/"):]).resolve()
-                if notes in f.parents and f.suffix == ".md" and f.is_file():
-                    return self._send(f.read_bytes(), "text/markdown; charset=utf-8")
+            if self.path.startswith("/local/"):
+                f = self._note()
+                if f and f.is_file():
+                    return self._send(f.read_bytes(), "text/markdown; charset=utf-8", {"X-Sha": sha_of(f)})
                 return self.send_error(404)
             return super().do_GET()
 
-        def _send(self, body: bytes, ctype: str):
+        def do_PUT(self):
+            f = self._note()
+            if not f:
+                return self.send_error(404)
+            current = sha_of(f) if f.is_file() else ""
+            if self.headers.get("X-Base-Sha", "") != current:
+                return self.send_error(409)
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(body)
+            return self._send(json.dumps({"sha": sha_of(f)}).encode(), "application/json")
+
+        def _send(self, body: bytes, ctype: str, extra: dict | None = None):
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
 

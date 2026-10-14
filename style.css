@@ -117,6 +117,23 @@ button, input, select { font: inherit; color: inherit; }
 .md a.missing { color: var(--muted); text-decoration: line-through dotted; }
 .md code { background: var(--chip); padding: 0 4px; border-radius: 4px; }
 
+/* editing */
+.edit { border-top: 1px solid var(--line); padding: 10px 0 12px; display: grid; gap: 8px; }
+.seg { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.seg .k { font-size: 12px; color: var(--muted); width: 32px; }
+.seg button { border: 1px solid var(--line); background: var(--chip); border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+.seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.memo { display: flex; gap: 6px; align-items: flex-end; }
+.memo textarea, #new-form textarea { flex: 1; width: 100%; resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
+.edit.busy { opacity: .5; pointer-events: none; }
+#panel-new h3 { margin: 0 0 10px; }
+#new-form label { display: block; margin-bottom: 10px; font-size: 13px; color: var(--muted); }
+#new-form input, #new-form select { display: block; width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+#pickbar { position: fixed; left: 12px; right: 12px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: 1000; display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; border-radius: 12px; background: var(--bg); box-shadow: var(--shadow); font-size: 14px; }
+#pick-text { flex: 1; }
+.picking #map { cursor: crosshair; }
+
 @media (min-width: 900px) {
   #sheet { left: auto; right: 12px; bottom: 12px; top: calc(64px + env(safe-area-inset-top)); width: 440px; height: auto; border-radius: 14px; }
   #sheet.full { height: auto; }
