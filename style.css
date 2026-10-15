@@ -31,7 +31,7 @@ button, input, select { font: inherit; color: inherit; }
 #topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; display: flex; align-items: center; gap: 4px;
   padding: calc(6px + env(safe-area-inset-top)) 8px 6px; background: var(--bar); color: var(--bar-fg); box-shadow: var(--shadow); }
 #topbar button { background: none; border: 0; color: inherit; min-width: 40px; height: 40px; border-radius: 8px; font-size: 18px; }
-#topbar button#btn-filter { font-size: 14px; padding: 0 10px; }
+#topbar button#btn-filter, #topbar button#btn-zones { font-size: 14px; padding: 0 10px; }
 #topbar button.on { background: rgba(255, 255, 255, .16); }
 #title { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #count { font-weight: 400; font-size: 13px; opacity: .75; }
@@ -154,3 +154,15 @@ button, input, select { font: inherit; color: inherit; }
   #sheet.full { height: auto; }
   .grip { display: none; }
 }
+
+/* 정비구역 */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; margin-bottom: 6px; }
+.legend i, .zp i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 5px; opacity: .8; border: 2px solid transparent; box-sizing: border-box; }
+.zp { font-size: 13px; line-height: 1.5; }
+.zones-in { margin: 6px 0; }
+.cands { margin: 10px 0; }
+.cand { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.cand > span { flex: 1; min-width: 0; }
+.cand .sub { color: var(--muted); font-size: 11px; }
+.hint.err { color: #d93025; }
+.cand-pin { border-radius: 50%; background: #111827; border: 3px solid #fff; box-shadow: 0 0 0 2px #111827; }

@@ -19,8 +19,9 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch {} },
 };
 const onLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
+const CFG_KEYS = ['source', 'repo', 'branch', 'token', 'kakao'];
 const cfg = Object.assign(
-  { source: onLocalhost ? 'local' : 'github', repo: 'YeonkyunLee/imjang', branch: 'main', token: '' },
+  { source: onLocalhost ? 'local' : 'github', repo: 'YeonkyunLee/imjang', branch: 'main', token: '', kakao: '' },
   store.get('cfg', {}),
 );
 const cacheKey = () => `notes:${cfg.source}:${cfg.repo}:${cfg.branch}`;
@@ -469,6 +470,174 @@ $('#route-prev').onclick = () => stepRoute(-1);
 $('#route-next').onclick = () => stepRoute(1);
 $('#route-close').onclick = () => { activeRoute = null; drawRoute(); };
 
+// ---------- 정비구역 경계 (서울 열린데이터광장 '의제처리구역' 중 정비 관련, zones.json) ----------
+const ZONE_COLOR = { 재개발: '#e8710a', 재건축: '#9334e6', 촉진지구: '#d93025', 소규모: '#0e9aa7', 주거환경: '#1e8e3e', 존치: '#80868b' };
+const ZONE_CODE = {
+  UQ1206: '주택재건축', UQ1240: '재건축', UQ1220: '재개발', UQ1221: '주택정비형 재개발', UQ1222: '도시정비형 재개발',
+  UQ1231: '주택정비형 재개발지구', UQ1232: '도시정비형 재개발지구', UQ1211: '주거환경개선', UQ1212: '주거환경관리', UQ1250: '결합정비',
+  UQ1811: '자율주택정비', UQ1812: '가로주택정비', UQ1813: '소규모재건축', UQ1814: '소규모재개발',
+  UQ5110: '주거지형 재정비촉진지구', UQ5120: '중심지형 재정비촉진지구', UQ5130: '고밀복합형 재정비촉진지구', UQ5140: '존치정비구역', UQ5150: '존치관리구역',
+};
+let zones = null; // GeoJSON features (+ bb)
+let zonesLoading = null;
+let zonesOn = store.get('zonesOn', false);
+const zoneLayer = L.geoJSON(null, {
+  renderer: L.canvas({ padding: 0.3 }),
+  bubblingMouseEvents: false,
+  attribution: '정비구역: 서울 열린데이터광장',
+  style: f => {
+    const big = f.properties.k === '촉진지구';
+    return { color: ZONE_COLOR[f.properties.k], weight: big ? 2 : 1.5, fillOpacity: big ? 0.03 : 0.14, dashArray: big ? '6 4' : null };
+  },
+  onEachFeature: (f, l) => {
+    l.on('click', e => (picking ? pickAt([e.latlng.lat, e.latlng.lng]) : zonePopup(e.latlng)));
+    l.on('contextmenu', e => openNew(e.latlng));
+  },
+});
+
+function loadZones() {
+  zonesLoading ||= (async () => {
+    setStatus('정비구역 불러오는 중…');
+    const r = await fetch('zones.json');
+    if (!r.ok) throw new Error(`정비구역 자료 실패 (${r.status})`);
+    const j = await r.json();
+    for (const f of j.features) {
+      let [x0, y0, x1, y1] = [180, 90, -180, -90];
+      for (const ring of f.geometry.coordinates) for (const [x, y] of ring) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      }
+      f.bb = [x0, y0, x1, y1];
+    }
+    zones = j.features;
+    zoneLayer.addData(j);
+    setStatus(null);
+    return zones;
+  })().catch(e => { zonesLoading = null; setStatus(e.message, true); throw e; });
+  return zonesLoading;
+}
+
+// 짝홀 규칙 — 구멍과 여러 조각을 함께 처리 (Leaflet 채우기 규칙과 같음)
+function inZone(f, [lat, lng]) {
+  const [x0, y0, x1, y1] = f.bb;
+  if (lng < x0 || lng > x1 || lat < y0 || lat > y1) return false;
+  let inside = false;
+  for (const ring of f.geometry.coordinates) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i], [xj, yj] = ring[j];
+      if ((yi > lat) !== (yj > lat) && lng < (xj - xi) * (lat - yi) / (yj - yi) + xi) inside = !inside;
+    }
+  }
+  return inside;
+}
+const zonesAt = ll => (zones || []).filter(f => inZone(f, ll));
+const zoneLabel = f => `${f.properties.n || '(이름 없음)'} · ${ZONE_CODE[f.properties.c] || f.properties.k}`;
+
+function zonePopup(latlng) {
+  const hit = zonesAt([latlng.lat, latlng.lng]);
+  if (!hit.length) return;
+  L.popup({ maxWidth: 260 }).setLatLng(latlng)
+    .setContent(hit.map(f => `<div class="zp"><i style="background:${ZONE_COLOR[f.properties.k]}"></i>${esc(zoneLabel(f))}</div>`).join(''))
+    .openOn(map);
+}
+
+async function setZones(on) {
+  zonesOn = on;
+  store.set('zonesOn', on);
+  $('#btn-zones').classList.toggle('on', on);
+  if (!on) { map.removeLayer(zoneLayer); return; }
+  try { await loadZones(); } catch { return; }
+  if (zonesOn) zoneLayer.addTo(map);
+  const n = currentNote();
+  if (n && !$('#sheet').hidden) showNote(n.name, false);
+}
+$('#btn-zones').onclick = () => setZones(!zonesOn);
+
+// ---------- 좌표 후보 (구역 이름 일치 · 카카오 주소/키워드 검색) ----------
+const normName = s => String(s).replace(/\s|제(?=\d)/g, '');
+const centroid = f => {
+  const ring = f.geometry.coordinates[0];
+  const s = ring.reduce((a, [x, y]) => [a[0] + y, a[1] + x], [0, 0]);
+  return [s[0] / ring.length, s[1] / ring.length];
+};
+const distKm = (a, b) => Math.hypot((a[0] - b[0]) * 111, (a[1] - b[1]) * 88.2);
+
+function regionCenter(region) {
+  const lls = places().filter(p => p.region === region && p.ll).map(p => p.ll);
+  return lls.length ? [lls.reduce((s, l) => s + l[0], 0) / lls.length, lls.reduce((s, l) => s + l[1], 0) / lls.length] : null;
+}
+
+function zoneCandidates(n) {
+  const k = normName(n.name).replace(/구역$/, '');
+  if (!/\d$/.test(k)) return [];
+  const re = new RegExp('^' + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\d-])');
+  return zones.filter(f => re.test(normName(f.properties.n)))
+    .map(f => ({ ll: centroid(f), label: zoneLabel(f), src: '정비구역 경계', zone: f }));
+}
+
+let kakaoReady = null;
+function loadKakao() {
+  kakaoReady ||= new Promise((ok, fail) => {
+    const s = document.createElement('script');
+    s.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(cfg.kakao)}&libraries=services&autoload=false`;
+    s.onload = () => window.kakao?.maps ? kakao.maps.load(ok) : fail(new Error('카카오 SDK 로드 실패'));
+    s.onerror = () => fail(new Error('카카오 SDK 로드 실패 — 키·도메인 등록·카카오맵 사용 설정 확인'));
+    document.head.append(s);
+  }).catch(e => { kakaoReady = null; throw e; });
+  return kakaoReady;
+}
+
+async function kakaoCandidates(n) {
+  await loadKakao();
+  const svc = kakao.maps.services;
+  const call = (fn, ...a) => new Promise(r => fn(...a, (res, st) => r(st === svc.Status.OK ? res : [])));
+  const out = [];
+  const addr = String(n.fm.주소 || '').replace(/\(.*?\)/g, '').replace(/\s*(일대|일원)\s*$/, '').trim();
+  if (addr) {
+    for (const a of await call((q, cb) => new svc.Geocoder().addressSearch(q, cb), addr)) {
+      out.push({ ll: [+a.y, +a.x], label: a.address_name, src: '카카오 주소' });
+    }
+  }
+  for (const p of (await call((q, cb) => new svc.Places().keywordSearch(q, cb), n.name)).slice(0, 5)) {
+    out.push({ ll: [+p.y, +p.x], label: `${p.place_name} · ${p.road_address_name || p.address_name}`, src: '카카오 장소' });
+  }
+  return out;
+}
+
+let cands = [];
+const candLayer = L.layerGroup().addTo(map);
+
+async function findCandidates(n) {
+  const box = $('#sheet-body .cands');
+  box.innerHTML = '<p class="hint">찾는 중…</p>';
+  const errs = [];
+  let list = [];
+  try { await loadZones(); list = zoneCandidates(n); } catch (e) { errs.push(e.message); }
+  if (cfg.kakao) {
+    try { list = list.concat(await kakaoCandidates(n)); } catch (e) { errs.push(e.message); }
+  }
+  const c = regionCenter(n.region);
+  if (c) for (const x of list) x.km = distKm(x.ll, c);
+  cands = list.sort((a, b) => (a.km ?? 0) - (b.km ?? 0));
+  if (currentNote() !== n) return;
+  box.innerHTML = (cands.length ? cands.map((x, i) => `<div class="cand">
+      <span>${esc(x.label)}<br><span class="sub">${esc(x.src)}${x.km != null ? ` · 지역 중심에서 ${x.km.toFixed(1)}km` : ''}</span></span>
+      <button class="btn sm" data-act="cand-show" data-i="${i}">보기</button>
+      <button class="btn sm primary" data-act="cand-use" data-i="${i}">저장</button></div>`).join('')
+    : `<p class="hint">후보 없음${cfg.kakao ? '' : ' — 설정에 카카오 키를 넣으면 주소로도 찾습니다'}. "위치 지정"으로 직접 찍어 주세요.</p>`)
+    + errs.map(m => `<p class="hint err">${esc(m)}</p>`).join('');
+}
+
+function showCandidate(x) {
+  candLayer.clearLayers();
+  L.marker(x.ll, { icon: L.divIcon({ className: 'cand-pin', iconSize: [18, 18] }), interactive: false, zIndexOffset: 900 }).addTo(candLayer);
+  if (!x.zone) { focus(x.ll); return; }
+  const g = L.geoJSON(x.zone, { interactive: false, style: { color: '#111827', weight: 3, fillOpacity: 0.1 } }).addTo(candLayer);
+  const sheetUp = window.innerWidth < 900;
+  map.flyToBounds(g.getBounds(), {
+    paddingTopLeft: [30, 70], paddingBottomRight: [sheetUp ? 30 : 470, sheetUp ? map.getSize().y * 0.55 : 30], maxZoom: 17, duration: 0.6,
+  });
+}
+
 // ---------- 상세 시트 ----------
 function nav(name) {
   history.pushState({ note: name, d: (history.state?.d || 0) + 1 }, '', '#note=' + encodeURIComponent(name));
@@ -476,6 +645,7 @@ function nav(name) {
 }
 function route() {
   const m = location.hash.match(/^#note=(.+)$/);
+  candLayer.clearLayers();
   if (m) showNote(decodeURIComponent(m[1])); else $('#sheet').hidden = true;
 }
 window.addEventListener('popstate', route);
@@ -515,6 +685,7 @@ function showNote(name, doFocus = true) {
     f.방문일 && `방문 ${f.방문일 instanceof Date ? f.방문일.toISOString().slice(0, 10) : f.방문일}`].filter(Boolean);
   const badges = n.isPlace ? [f.유형, f.상태, n.rating].filter(Boolean) : ['노트'];
   const q = encodeURIComponent(n.name);
+  const inZones = n.ll ? zonesAt(n.ll) : [];
   const acts = [
     n.ll && `<button class="btn" data-act="focus">지도에서 보기</button>`,
     n.ll && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/to/${q},${n.ll[0]},${n.ll[1]}">길찾기</a>`,
@@ -529,7 +700,9 @@ function showNote(name, doFocus = true) {
       ${n.error ? `<span class="tag warn">frontmatter 오류</span>` : ''}</div>
     ${facts.length ? `<div class="facts">${esc(facts.join(' · '))}</div>` : ''}
     ${f.주소 ? `<div class="addr">${esc(f.주소)}</div>` : ''}
+    ${inZones.length ? `<div class="zones-in">${inZones.map(z => `<div class="zp"><i style="background:${ZONE_COLOR[z.properties.k]}"></i>${esc(zoneLabel(z))}</div>`).join('')}</div>` : ''}
     ${acts.length ? `<div class="actions">${acts.join('')}</div>` : ''}
+    ${n.isPlace && !n.ll ? `<div class="cands"><button class="btn" data-act="cands">위치 후보 찾기</button></div>` : ''}
     ${n.isPlace ? editHtml(n) : ''}
     <div class="md">${renderMd(n.body, n.name)}</div>`;
   if (doFocus) $('#sheet-body').scrollTop = 0;
@@ -566,6 +739,13 @@ $('#sheet-body').onclick = async e => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (act === 'focus' && n.ll) focus(n.ll);
   if (act === 'pick') startPick(n);
+  if (act === 'cands') findCandidates(n);
+  if (act === 'cand-show') showCandidate(cands[e.target.dataset.i]);
+  if (act === 'cand-use') {
+    const x = cands[e.target.dataset.i];
+    candLayer.clearLayers();
+    if (await save(n, { type: 'fields', fields: { location: fmtLL(x.ll) } }, '위치', '위치 저장됨')) showNote(n.name);
+  }
   if (act === 'memo') {
     const ta = $('#sheet-body .memo textarea');
     if (!ta.value.trim()) return;
@@ -615,9 +795,10 @@ $('#pick-gps').onclick = () => {
 
 // ---------- 새 장소 (지도 길게 누르기) ----------
 let newLL = null;
-map.on('contextmenu', e => {
+map.on('contextmenu', e => openNew(e.latlng));
+function openNew(latlng) {
   if (picking) return;
-  newLL = [e.latlng.lat, e.latlng.lng];
+  newLL = [latlng.lat, latlng.lng];
   const f = $('#new-form');
   f.reset();
   const cur = currentNote();
@@ -626,7 +807,7 @@ map.on('contextmenu', e => {
   $('#new-ll').textContent = `좌표 ${fmtLL(newLL)}`;
   togglePanel('new', true);
   f.elements.name.focus();
-});
+}
 $('#new-cancel').onclick = () => togglePanel(null);
 $('#new-form').onsubmit = async e => {
   e.preventDefault();
@@ -662,10 +843,10 @@ map.on('locationerror', e => setStatus(`위치 실패: ${e.message}`, true));
 
 // ---------- 설정 ----------
 const form = $('#settings-form');
-function fillSettings() { for (const k of ['source', 'repo', 'branch', 'token']) form.elements[k].value = cfg[k]; }
+function fillSettings() { for (const k of CFG_KEYS) form.elements[k].value = cfg[k]; }
 form.onsubmit = e => {
   e.preventDefault();
-  for (const k of ['source', 'repo', 'branch', 'token']) cfg[k] = form.elements[k].value.trim();
+  for (const k of CFG_KEYS) cfg[k] = form.elements[k].value.trim();
   cfg.repo ||= 'YeonkyunLee/imjang'; cfg.branch ||= 'main';
   store.set('cfg', cfg);
   firstRender = true;
@@ -754,3 +935,4 @@ if ('serviceWorker' in navigator && (!onLocalhost || location.search.includes('s
 
 fillSettings();
 load();
+if (zonesOn) setZones(true);

@@ -17,6 +17,7 @@
 <header id="topbar">
   <button id="btn-list" title="목록">☰</button>
   <div id="title">임장 지도 <span id="count"></span></div>
+  <button id="btn-zones" title="정비구역 경계">구역</button>
   <button id="btn-filter" title="필터">필터</button>
   <button id="btn-locate" title="내 위치">◎</button>
   <button id="btn-settings" title="설정">⚙</button>
@@ -32,6 +33,17 @@
 <section id="panel-filter" class="panel" hidden>
   <div id="filter-groups"></div>
   <button id="filter-reset" class="btn">필터 초기화</button>
+  <div class="fgroup"><h4>구역 레이어 (상단 "구역" 버튼)</h4>
+    <div class="legend">
+      <span><i style="border-color:#d93025;border-style:dashed"></i>재정비촉진지구</span>
+      <span><i style="background:#e8710a"></i>재개발</span>
+      <span><i style="background:#9334e6"></i>재건축</span>
+      <span><i style="background:#0e9aa7"></i>가로주택·소규모</span>
+      <span><i style="background:#1e8e3e"></i>주거환경</span>
+      <span><i style="background:#80868b"></i>존치</span>
+    </div>
+    <p class="hint">서울시 도시계획 결정 구역(2026-09 자료). 해제·완료된 구역이 남아 있거나 최근 지정분이 빠졌을 수 있습니다. 서울 밖(광명 등)은 없습니다. 구역을 누르면 이름이 나옵니다.</p>
+  </div>
 </section>
 
 <section id="panel-list" class="panel" hidden>
@@ -51,6 +63,7 @@
     <label>브랜치 <input name="branch" placeholder="main" autocomplete="off"></label>
     <label>GitHub 토큰 <input name="token" type="password" placeholder="github_pat_…" autocomplete="off"></label>
     <p class="hint">fine-grained 토큰, imjang 저장소 하나에 Contents 권한만. 이 브라우저에만 저장됩니다.</p>
+    <label>카카오 JavaScript 키 (선택) <input name="kakao" autocomplete="off" placeholder="좌표 없는 장소를 주소로 찾을 때"></label>
     <div class="row">
       <button type="submit" class="btn primary">저장하고 다시 불러오기</button>
       <button type="button" id="cache-clear" class="btn">캐시 지우기</button>
