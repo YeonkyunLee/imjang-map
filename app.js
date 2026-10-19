@@ -853,6 +853,21 @@ form.onsubmit = e => {
   togglePanel(null);
   load();
 };
+// 이름·권한·기간이 채워진 토큰 생성 화면 (저장소 선택은 URL로 못 채움)
+$('#token-new').href = 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({
+  name: 'imjang-map', description: '임장 지도 앱: imjang 저장소 노트 읽기·쓰기',
+  target_name: cfg.repo.split('/')[0] || 'YeonkyunLee', expires_in: '366', contents: 'write',
+});
+$('#token-paste').onclick = async () => {
+  try {
+    const t = (await navigator.clipboard.readText()).trim();
+    if (!/^(github_pat_|ghp_)\w+$/.test(t)) { setStatus('클립보드에 토큰이 없습니다 — 복사 후 다시', true); return; }
+    form.elements.token.value = t;
+    setStatus('붙여넣음 — "저장하고 다시 불러오기"를 누르세요');
+  } catch {
+    setStatus('붙여넣기 권한이 없어요 — 토큰 칸을 길게 눌러 붙여넣으세요', true);
+  }
+};
 $('#cache-clear').onclick = () => {
   Object.keys(localStorage).filter(k => k.startsWith('notes:')).forEach(store.del);
   setStatus('캐시를 지웠습니다');

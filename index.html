@@ -62,7 +62,11 @@
     <label>저장소 <input name="repo" placeholder="YeonkyunLee/imjang" autocomplete="off"></label>
     <label>브랜치 <input name="branch" placeholder="main" autocomplete="off"></label>
     <label>GitHub 토큰 <input name="token" type="password" placeholder="github_pat_…" autocomplete="off"></label>
-    <p class="hint">fine-grained 토큰, imjang 저장소 하나에 Contents 권한만. 이 브라우저에만 저장됩니다.</p>
+    <div class="row">
+      <a id="token-new" class="btn" target="_blank" rel="noopener">① 토큰 만들기</a>
+      <button type="button" id="token-paste" class="btn">② 붙여넣기</button>
+    </div>
+    <p class="hint">①을 누르면 이름·권한(Contents 읽기/쓰기)·기간(1년)이 채워진 GitHub 화면이 열립니다. Repository access에서 "Only select repositories" → <b>imjang</b>만 고르고 Generate → 토큰 복사 → 돌아와서 ② → 저장. 토큰은 이 브라우저에만 저장됩니다.</p>
     <label>카카오 JavaScript 키 (선택) <input name="kakao" autocomplete="off" placeholder="좌표 없는 장소를 주소로 찾을 때"></label>
     <div class="row">
       <button type="submit" class="btn primary">저장하고 다시 불러오기</button>
