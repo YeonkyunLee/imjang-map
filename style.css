@@ -166,3 +166,8 @@ button, input, select { font: inherit; color: inherit; }
 .cand .sub { color: var(--muted); font-size: 11px; }
 .hint.err { color: #d93025; }
 .cand-pin { border-radius: 50%; background: #111827; border: 3px solid #fff; box-shadow: 0 0 0 2px #111827; }
+/* 사진 */
+.memo .col { display: flex; flex-direction: column; gap: 6px; }
+.memo label.btn { text-align: center; cursor: pointer; }
+.md img.att { display: block; max-width: 100%; max-height: 180px; margin: 6px 0; border-radius: 8px; cursor: zoom-in; background: var(--chip); }
+.md img.att.big { max-height: none; cursor: zoom-out; }

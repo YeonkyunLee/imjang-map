@@ -8,11 +8,13 @@
 """
 import argparse
 import json
+import mimetypes
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 APP = Path(__file__).resolve().parent
+ALLOWED = {".md", ".jpg", ".jpeg", ".png", ".webp", ".gif"}  # 노트와 첨부 사진
 DEFAULT_NOTES = Path.home() / "Documents" / "Ian_obsidian" / "임장"
 
 
@@ -28,12 +30,12 @@ def make_handler(notes: Path):
             super().__init__(*args, directory=str(APP), **kwargs)
 
         def _note(self):
-            """/local/<path> → 노트 폴더 안의 .md 경로, 아니면 None."""
+            """/local/<path> → 노트 폴더 안의 노트·사진 경로, 아니면 None."""
             path = unquote(urlsplit(self.path).path)
             if not path.startswith("/local/"):
                 return None
             f = (notes / path[len("/local/"):]).resolve()
-            return f if notes in f.parents and f.suffix == ".md" else None
+            return f if notes in f.parents and f.suffix.lower() in ALLOWED else None
 
         def do_GET(self):
             if unquote(urlsplit(self.path).path) == "/local/index.json":
@@ -46,7 +48,8 @@ def make_handler(notes: Path):
             if self.path.startswith("/local/"):
                 f = self._note()
                 if f and f.is_file():
-                    return self._send(f.read_bytes(), "text/markdown; charset=utf-8", {"X-Sha": sha_of(f)})
+                    ctype = "text/markdown; charset=utf-8" if f.suffix == ".md" else mimetypes.guess_type(f.name)[0] or "application/octet-stream"
+                    return self._send(f.read_bytes(), ctype, {"X-Sha": sha_of(f)})
                 return self.send_error(404)
             return super().do_GET()
 

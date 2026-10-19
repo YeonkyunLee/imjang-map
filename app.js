@@ -67,6 +67,16 @@ const sources = {
       if (!r.ok) throw new Error(`저장 실패 (${r.status})`);
       return (await r.json()).sha;
     },
+    async writeBin(path, data) {
+      const r = await net('local/' + encPath(path), { method: 'PUT', headers: { 'X-Base-Sha': '' }, body: Uint8Array.from(atob(data), c => c.charCodeAt(0)) });
+      if (r.status === 409) throw new Error(`${path}: 같은 이름의 파일이 이미 있음`);
+      if (!r.ok) throw new Error(`사진 저장 실패 (${r.status})`);
+    },
+    async readBin(path) {
+      const r = await net('local/' + encPath(path));
+      if (!r.ok) throw new Error(`${path} (${r.status})`);
+      return r.blob();
+    },
   },
   github: {
     headers(raw) {
@@ -106,6 +116,18 @@ const sources = {
       if (r.status === 409 || r.status === 422) throw conflict();
       if (!r.ok) throw new Error(`저장 실패 (${r.status}${r.status === 403 || r.status === 404 ? ' — 토큰에 Contents 쓰기 권한 확인' : ''})`);
       return (await r.json()).content.sha;
+    },
+    async writeBin(path, data, message) {
+      const r = await net(this.contentsUrl(path), {
+        method: 'PUT', headers: this.headers(), body: JSON.stringify({ message, content: data, branch: cfg.branch }),
+      });
+      if (r.status === 409 || r.status === 422) throw new Error(`${path}: 같은 이름의 파일이 이미 있음`);
+      if (!r.ok) throw new Error(`사진 저장 실패 (${r.status})`);
+    },
+    async readBin(path) {
+      const r = await net(`${this.contentsUrl(path)}?ref=${encodeURIComponent(cfg.branch)}`, { headers: this.headers(true) });
+      if (!r.ok) throw new Error(`${path} (${r.status})`);
+      return r.blob();
     },
   },
 };
@@ -158,7 +180,7 @@ function newNoteText({ name, region, type, addr, ll, memo }) {
 //   {type:'fields', fields} · {type:'memo', memo, stamp}
 const applyChange = (text, c) => (c.type === 'fields' ? setFields(text, c.fields) : addMemo(text, c.memo, c.stamp));
 
-// 작업: {kind:'edit', path, change, message} | {kind:'create', path, text, message}
+// 작업: {kind:'edit', path, change, message} | {kind:'create', path, text, message} | {kind:'upload', path, data(base64), message}
 const queueKey = () => `queue:${cacheKey()}`;
 let queue = [];
 let failed = store.get('failed', []);
@@ -167,6 +189,7 @@ const saveQueue = () => store.set(queueKey(), queue);
 // 충돌이면 최신본을 받아 한 번 더 적용
 async function commitOp(op) {
   const src = sources[cfg.source];
+  if (op.kind === 'upload') return src.writeBin(op.path, op.data, op.message);
   if (op.kind === 'create') {
     if (await src.fetchOne(op.path)) throw new Error(`${op.path}: 같은 이름의 노트가 이미 있음`);
     raw[op.path] = { sha: await src.write(op.path, op.text, null, op.message), text: op.text };
@@ -199,7 +222,11 @@ async function submit(op) {
     }
   }
   queue.push(op);
-  saveQueue();
+  if (!saveQueue()) {
+    queue.pop();
+    saveQueue();
+    throw new Error('오프라인 보관 공간이 부족합니다 — 연결된 뒤 다시 시도하세요');
+  }
   afterWrite();
   return 'queued';
 }
@@ -216,7 +243,7 @@ async function flush() {
         sent++;
       } catch (e) {
         if (e.offline) break;
-        failed.push({ ...queue[0], error: e.message, at: new Date().toLocaleString() });
+        failed.push({ ...queue[0], data: undefined, error: e.message, at: new Date().toLocaleString() });
         store.set('failed', failed);
         setStatus(`대기 중이던 저장 실패: ${e.message} — 설정(⚙)에서 내용 확인`, true);
       }
@@ -657,8 +684,10 @@ $('#sheet-close').onclick = () => {
 $('#sheet-expand').onclick = () => $('#sheet').classList.toggle('full');
 
 const WIKILINK = /\[\[([^\]|#\\]+)(?:#[^\]|\\]*)?(?:\\?\|([^\]]+))?\]\]/g;
+const IMG_EMBED = /!\[\[([^\]|]+\.(?:jpe?g|png|webp|gif))(?:\\?\|[^\]]*)?\]\]/gi;
 function renderMd(body, selfName) {
   const text = body.replace(new RegExp(`^\\s*# ${selfName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n`), '')
+    .replace(IMG_EMBED, (_, p) => `<img class="att" data-att="${esc(p.trim())}" alt="사진">`)
     .replace(WIKILINK, (_, t, a) => {
       const target = t.trim();
       return `<a class="wl${byName.has(target) ? '' : ' missing'}" href="#note=${encodeURIComponent(target)}" data-note="${esc(target)}">${esc((a || t).trim())}</a>`;
@@ -673,7 +702,8 @@ function editHtml(n) {
     ${seg('상태', FILTERS.상태, n.fm.상태)}
     ${seg('평가', ['1순위', '추천', '후보', '탈락', '없음'], n.fm.평가)}
     <div class="memo"><textarea rows="2" placeholder="현장 메모 (시각과 함께 임장 메모에 추가)"></textarea>
-      <button class="btn primary" data-act="memo">저장</button></div>
+      <div class="col"><button class="btn primary" data-act="memo">저장</button>
+        <label class="btn" title="사진 첨부 (메모를 적으면 설명으로 함께 저장)">📷<input type="file" accept="image/*" multiple hidden id="photo-input"></label></div></div>
   </div>`;
 }
 
@@ -708,8 +738,68 @@ function showNote(name, doFocus = true) {
   if (doFocus) $('#sheet-body').scrollTop = 0;
   $('#sheet-body').querySelectorAll('.md a[href^="http"]').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
   $('#sheet').hidden = false;
+  loadAtts();
   if (n.ll && doFocus) focus(n.ll);
 }
+
+// ---------- 사진 ----------
+const attUrls = new Map(); // path → object URL / data URL
+async function loadAtts() {
+  for (const img of $('#sheet-body').querySelectorAll('img.att:not([src])')) {
+    const p = img.dataset.att;
+    const pending = queue.find(o => o.kind === 'upload' && o.path === p);
+    try {
+      if (pending) img.src = 'data:image/jpeg;base64,' + pending.data;
+      else {
+        if (!attUrls.has(p)) attUrls.set(p, URL.createObjectURL(await sources[cfg.source].readBin(p)));
+        img.src = attUrls.get(p);
+      }
+    } catch (e) {
+      img.replaceWith(Object.assign(document.createElement('span'), { className: 'tag warn', textContent: `사진 못 불러옴: ${p.split('/').pop()}` }));
+    }
+  }
+}
+
+async function shrink(file, max = 1600, q = 0.8) {
+  const bmp = await createImageBitmap(file);
+  const s = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * s), height: Math.round(bmp.height * s) });
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return c.toDataURL('image/jpeg', q).split(',')[1];
+}
+
+async function addPhotos(n, files) {
+  const ta = $('#sheet-body .memo textarea');
+  const box = $('#sheet-body .edit');
+  box?.classList.add('busy');
+  const d = new Date();
+  const stamp = d.toLocaleString('sv-SE').replace(/\D/g, '').slice(0, 14); // YYYYMMDDHHMMSS
+  const base = n.name.replace(/[\\/:*?"<>|#^[\]]/g, ' ').trim();
+  const paths = [];
+  let queued = false;
+  try {
+    for (const [i, f] of [...files].entries()) {
+      setStatus(`사진 ${i + 1}/${files.length} 줄이는 중…`);
+      const path = `첨부/${base}-${stamp}${files.length > 1 ? `-${i + 1}` : ''}.jpg`;
+      const r = await submit({ kind: 'upload', path, data: await shrink(f), message: `앱: ${n.name} 사진` });
+      queued ||= r === 'queued';
+      paths.push(path);
+    }
+    const memo = [ta?.value.trim(), ...paths.map(p => `![[${p}]]`)].filter(Boolean).join(' ');
+    const ok = await save(n, { type: 'memo', memo, stamp: `${today()} ${nowHM()}` }, '사진', queued ? QUEUED_MSG : `사진 ${paths.length}장 저장됨`);
+    if (ok) showNote(n.name, false);
+  } catch (e) {
+    setStatus(`사진 저장 실패: ${e.message}`, true);
+  } finally {
+    box?.classList.remove('busy');
+  }
+}
+$('#sheet-body').addEventListener('change', e => {
+  if (e.target.id !== 'photo-input' || !e.target.files.length) return;
+  const n = currentNote();
+  if (n) addPhotos(n, e.target.files);
+});
 
 const currentNote = () => byName.get(decodeURIComponent(location.hash.match(/^#note=(.+)$/)?.[1] || ''));
 
@@ -732,6 +822,7 @@ async function save(n, change, message, okMsg) {
 }
 
 $('#sheet-body').onclick = async e => {
+  if (e.target.matches('img.att')) { e.target.classList.toggle('big'); return; }
   const a = e.target.closest('a.wl');
   if (a) { e.preventDefault(); if (!a.classList.contains('missing')) nav(a.dataset.note); return; }
   const n = currentNote();
@@ -901,7 +992,7 @@ function render(info, doRoute = true) {
 function drawInfo() {
   const ps = places();
   const errs = notes.filter(n => n.error);
-  const desc = op => op.kind === 'create' ? '새 노트' : op.change.type === 'memo' ? `메모: ${op.change.memo}` : JSON.stringify(op.change.fields);
+  const desc = op => op.kind === 'create' ? '새 노트' : op.kind === 'upload' ? '사진 (원본은 폰 갤러리에 있음)' : op.change.type === 'memo' ? `메모: ${op.change.memo}` : JSON.stringify(op.change.fields);
   $('#load-info').innerHTML = `${esc(loadInfo)}<br>노트 ${notes.length} · 장소 ${ps.length} · 좌표 없음 ${ps.filter(n => !n.ll).length}`
     + (queue.length ? `<br><b>저장 대기 ${queue.length}건</b> — 연결되면 자동 전송 <button type="button" class="btn sm" id="flush-now">지금 보내기</button>` : '')
     + (errs.length ? `<br>frontmatter 오류: ${errs.map(n => esc(n.path)).join(', ')}` : '')
