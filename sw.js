@@ -1,6 +1,6 @@
 // 서비스워커: 앱 화면과 라이브러리는 캐시 우선 + 백그라운드 갱신, 지도 타일은 본 곳만 캐시.
 // 노트 데이터(GitHub API, /local/)는 건드리지 않음 — 앱이 직접 캐시·대기열 처리.
-const SHELL = 'shell-v3';
+const SHELL = 'shell-v4';
 const TILES = 'tiles-v1';
 const MAX_TILES = 3000;
 const SHELL_FILES = [
