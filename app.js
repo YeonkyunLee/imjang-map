@@ -312,7 +312,6 @@ function parseNote(path, text) {
 let raw = {}; // path → {sha, text}
 let notes = [];
 const byName = new Map();
-let markers = new Map(); // name → marker
 let firstRender = true;
 const filters = Object.fromEntries(Object.keys(FILTERS).map(k => [k, new Set(store.get('filters', {})[k] || [])]));
 const saveFilters = () => store.set('filters', Object.fromEntries(Object.entries(filters).map(([k, s]) => [k, [...s]])));
@@ -320,20 +319,36 @@ const places = () => notes.filter(n => n.isPlace);
 const fieldOf = (n, k) => k === '평가' ? n.rating : k === '지역' ? n.region : n.fm[k];
 const passes = n => Object.entries(filters).every(([k, s]) => !s.size || s.has(fieldOf(n, k)));
 
-// ---------- 지도 ----------
-const savedView = store.get('view', null);
-const map = L.map('map', { zoomControl: false, attributionControl: true })
-  .setView(savedView?.c || [37.495, 126.96], savedView?.z || 12);
-L.control.zoom({ position: 'bottomright' }).addTo(map);
-// crossOrigin: 서비스워커가 타일을 (opaque가 아닌) 일반 응답으로 캐시하도록
-L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19, attribution: '&copy; OpenStreetMap', crossOrigin: true,
-}).addTo(map);
-const layer = L.layerGroup().addTo(map);
-const syncLabels = () => map.getContainer().classList.toggle('show-labels', map.getZoom() >= 15);
-map.on('zoomend', syncLabels);
-map.on('moveend', () => store.set('view', { c: map.getCenter(), z: map.getZoom() }));
-syncLabels();
+// ---------- 지도 (카카오맵. SDK는 index.html에서 동기 로드 — 실패하면 지도 없이 목록·상세만) ----------
+// 좌표는 앱 안에서 [lat, lng] 배열, 카카오 객체로는 경계에서만 바꾼다. 카카오 레벨은 작을수록 확대(1~14).
+const K = window.kakao?.maps?.Map ? kakao.maps : null;
+const LL = ([lat, lng]) => new K.LatLng(lat, lng);
+const llOf = p => [p.getLat(), p.getLng()];
+const savedView = store.get('kview', null);
+const mapEl = $('#map');
+const map = K && new K.Map(mapEl, { center: LL(savedView?.c || [37.495, 126.96]), level: savedView?.l || 8 });
+// 지도 위 HTML 요소 (마커·라벨·팝업). clickable: 요소를 눌러도 지도 클릭으로 번지지 않음
+function overlay(ll, el, { x = 0.5, y = 0.5, z = 0, clickable = false } = {}) {
+  if (typeof el === 'string') el = Object.assign(document.createElement('div'), { innerHTML: el }).firstElementChild;
+  return new K.CustomOverlay({ map, position: LL(ll), content: el, xAnchor: x, yAnchor: y, zIndex: z, clickable });
+}
+const clear = list => { for (const o of list.splice(0)) o.setMap(null); };
+// lls를 화면에 맞추되 minLevel보다 더 확대하지는 않음. pad = [위, 오른쪽, 아래, 왼쪽]
+function fitTo(lls, pad = [30, 30, 30, 30], minLevel = 4) {
+  if (!map || !lls.length) return;
+  const b = new K.LatLngBounds();
+  for (const ll of lls) b.extend(LL(ll));
+  map.setBounds(b, ...pad);
+  if (map.getLevel() < minLevel) map.setLevel(minLevel);
+}
+let markerObjs = [];
+if (map) {
+  if (window.innerWidth >= 900) map.addControl(new K.ZoomControl(), K.ControlPosition.LEFT); // 폰은 두 손가락 확대
+  const syncLabels = () => mapEl.classList.toggle('show-labels', map.getLevel() <= 5);
+  K.event.addListener(map, 'zoom_changed', syncLabels);
+  K.event.addListener(map, 'idle', () => store.set('kview', { c: llOf(map.getCenter()), l: map.getLevel() }));
+  syncLabels();
+}
 
 function pinHtml(n, mini) {
   const shape = n.fm.유형 === '재건축' ? 'sq' : n.fm.유형 === '재개발구역' ? 'dia' : 'circ';
@@ -343,33 +358,31 @@ function pinHtml(n, mini) {
 }
 
 function drawMarkers() {
-  layer.clearLayers();
-  markers = new Map();
   const shown = places().filter(passes);
-  for (const n of shown) {
-    if (!n.ll) continue;
-    const mk = L.marker(n.ll, {
-      icon: L.divIcon({ className: 'pin-wrap', html: pinHtml(n), iconSize: [22, 22], iconAnchor: [11, 11] }),
-      zIndexOffset: { '1순위': 300, '추천': 200, '후보': 100 }[n.rating] || 0,
-    });
-    mk.bindTooltip(esc(n.name), { permanent: true, direction: 'right', offset: [10, 0], className: 'lbl' });
-    mk.on('click', () => nav(n.name));
-    mk.addTo(layer);
-    markers.set(n.name, mk);
-  }
   const all = places();
   $('#count').textContent = `${shown.length}/${all.length}${queue.length ? ` · 대기 ${queue.length}` : ''}`;
-  if (firstRender && !savedView && markers.size) {
-    map.fitBounds(L.latLngBounds([...markers.values()].map(m => m.getLatLng())), { padding: [30, 30] });
+  if (!map) return;
+  clear(markerObjs);
+  for (const n of shown) {
+    if (!n.ll) continue;
+    const el = Object.assign(document.createElement('div'), {
+      className: 'pin-wrap', innerHTML: `${pinHtml(n)}<span class="lbl">${esc(n.name)}</span>`,
+    });
+    el.onclick = () => nav(n.name);
+    markerObjs.push(overlay(n.ll, el, { z: { '1순위': 3, '추천': 2, '후보': 1 }[n.rating] || 0, clickable: true }));
   }
+  if (firstRender && !savedView) fitTo(shown.filter(n => n.ll).map(n => n.ll));
   firstRender = false;
 }
 
+// ll을 확대해서 보여주되, 상세 시트에 가리지 않는 쪽(폰: 위, PC: 왼쪽)에 둔다
 function focus(ll) {
-  const z = Math.max(map.getZoom(), 16);
+  if (!map) return;
+  if (map.getLevel() > 4) map.setLevel(4);
   const sheetUp = window.innerWidth < 900;
-  const pt = map.project(ll, z).add([sheetUp ? 0 : 220, sheetUp ? map.getSize().y * 0.25 : 0]);
-  map.flyTo(map.unproject(pt, z), z, { duration: 0.6 });
+  const proj = map.getProjection();
+  const p = proj.containerPointFromCoords(LL(ll));
+  map.panTo(proj.coordsFromContainerPoint(new K.Point(p.x + (sheetUp ? 0 : 220), p.y + (sheetUp ? mapEl.clientHeight * 0.25 : 0))));
 }
 
 // ---------- 패널 ----------
@@ -384,7 +397,13 @@ function togglePanel(name, force) {
 $('#btn-filter').onclick = () => togglePanel('filter');
 $('#btn-list').onclick = () => togglePanel('list');
 $('#btn-settings').onclick = () => togglePanel('settings');
-map.on('click', e => (picking ? pickAt([e.latlng.lat, e.latlng.lng]) : togglePanel(null)));
+function mapClick(ll) {
+  if (Date.now() - longPressAt < 800) return; // 길게 누른 손을 뗄 때 오는 클릭
+  if (picking) { pickAt(ll); return; }
+  togglePanel(null);
+  if (zonesOn) zonePopup(ll); else closePopup();
+}
+if (map) K.event.addListener(map, 'click', e => mapClick(llOf(e.latLng)));
 
 function drawFilters() {
   const all = places();
@@ -436,7 +455,7 @@ $('#list-body').onclick = e => {
 // ---------- 추천 동선 ('임장 계획' 노트의 지역별 '추천 동선' 줄과 그 아래 들여쓴 줄의 [[링크]] 순서) ----------
 let routes = {};
 let activeRoute = null; // {region, stops, i}
-const routeLayer = L.layerGroup().addTo(map);
+const routeObjs = [];
 
 function parseRoutes() {
   const plan = byName.get('임장 계획');
@@ -465,20 +484,22 @@ function startRoute(region) {
   if (window.innerWidth < 900) togglePanel(null);
   drawRoute();
   const lls = activeRoute.stops.map(s => byName.get(s)?.ll).filter(Boolean);
-  if (lls.length) map.flyToBounds(lls, { padding: [60, 60], maxZoom: 16, duration: 0.6 });
+  fitTo(lls, [60, 60, 60, 60]);
 }
 
 function drawRoute() {
-  routeLayer.clearLayers();
+  if (map) clear(routeObjs);
   if (activeRoute) activeRoute.stops = routes[activeRoute.region] || [];
   if (!activeRoute?.stops.length) { activeRoute = null; $('#routebar').hidden = true; return; }
   const { stops, i, region } = activeRoute;
-  const pts = stops.map(s => byName.get(s)?.ll).filter(Boolean);
-  L.polyline(pts, { color: '#111827', weight: 3, opacity: 0.7, dashArray: '6 6', interactive: false }).addTo(routeLayer);
-  stops.forEach((s, k) => {
-    const ll = byName.get(s)?.ll;
-    if (ll) L.marker(ll, { icon: L.divIcon({ className: `stop-num${k === i ? ' cur' : ''}`, html: String(k + 1), iconSize: [18, 18], iconAnchor: [-6, 24] }), interactive: false, zIndexOffset: 500 }).addTo(routeLayer);
-  });
+  if (map) {
+    const pts = stops.map(s => byName.get(s)?.ll).filter(Boolean);
+    routeObjs.push(new K.Polyline({ map, path: pts.map(LL), strokeColor: '#111827', strokeWeight: 3, strokeOpacity: 0.7, strokeStyle: 'shortdash' }));
+    stops.forEach((s, k) => {
+      const ll = byName.get(s)?.ll;
+      if (ll) routeObjs.push(overlay(ll, `<div class="stop-num${k === i ? ' cur' : ''}">${k + 1}</div>`, { x: -0.33, y: 1.33, z: 5 }));
+    });
+  }
   const noLL = stops.filter(s => !byName.get(s)?.ll).length;
   $('#route-text').textContent = i < 0
     ? `${region} 동선 ${stops.length}곳${noLL ? ` (좌표 없음 ${noLL})` : ''}`
@@ -509,19 +530,38 @@ const ZONE_CODE = {
 let zones = null; // GeoJSON features (+ bb)
 let zonesLoading = null;
 let zonesOn = store.get('zonesOn', false);
-const zoneLayer = L.geoJSON(null, {
-  renderer: L.canvas({ padding: 0.3 }),
-  bubblingMouseEvents: false,
-  attribution: '정비구역: 서울 열린데이터광장',
-  style: f => {
-    const big = f.properties.k === '촉진지구';
-    return { color: ZONE_COLOR[f.properties.k], weight: big ? 2 : 1.5, fillOpacity: big ? 0.03 : 0.14, dashArray: big ? '6 4' : null };
-  },
-  onEachFeature: (f, l) => {
-    l.on('click', e => (picking ? pickAt([e.latlng.lat, e.latlng.lng]) : zonePopup(e.latlng)));
-    l.on('contextmenu', e => openNew(e.latlng));
-  },
-});
+// 2천여 개를 한꺼번에 그리면 폰이 버벅여서, 레벨 ZONE_LEVEL 이하로 확대했을 때 화면 안의 구역만 그린다
+const ZONE_LEVEL = 7;
+const zoneShown = new Set();
+const zonePath = f => f.geometry.coordinates.map(ring => ring.map(([x, y]) => new K.LatLng(y, x)));
+function zonePoly(f) {
+  if (f.poly) return f.poly;
+  const big = f.properties.k === '촉진지구';
+  f.poly = new K.Polygon({
+    path: zonePath(f), strokeColor: ZONE_COLOR[f.properties.k], strokeWeight: big ? 2 : 1.5, strokeOpacity: 0.9,
+    strokeStyle: big ? 'dash' : 'solid', fillColor: ZONE_COLOR[f.properties.k], fillOpacity: big ? 0.03 : 0.14,
+  });
+  K.event.addListener(f.poly, 'click', e => mapClick(llOf(e.latLng)));
+  return f.poly;
+}
+let zoneHintShown = false;
+function drawZones() {
+  if (!map || !zones) return;
+  const want = new Set();
+  if (zonesOn && map.getLevel() <= ZONE_LEVEL) {
+    const b = map.getBounds(), sw = b.getSouthWest(), ne = b.getNorthEast();
+    for (const f of zones) {
+      const [x0, y0, x1, y1] = f.bb;
+      if (x1 >= sw.getLng() && x0 <= ne.getLng() && y1 >= sw.getLat() && y0 <= ne.getLat()) want.add(f);
+    }
+  } else if (zonesOn && !zoneHintShown) {
+    zoneHintShown = true;
+    setStatus('구역 경계는 지도를 더 확대하면 보입니다');
+  }
+  for (const f of zoneShown) if (!want.has(f)) { f.poly.setMap(null); zoneShown.delete(f); }
+  for (const f of want) if (!zoneShown.has(f)) { zonePoly(f).setMap(map); zoneShown.add(f); }
+}
+if (map) K.event.addListener(map, 'idle', drawZones);
 
 function loadZones() {
   zonesLoading ||= (async () => {
@@ -537,14 +577,13 @@ function loadZones() {
       f.bb = [x0, y0, x1, y1];
     }
     zones = j.features;
-    zoneLayer.addData(j);
     setStatus(null);
     return zones;
   })().catch(e => { zonesLoading = null; setStatus(e.message, true); throw e; });
   return zonesLoading;
 }
 
-// 짝홀 규칙 — 구멍과 여러 조각을 함께 처리 (Leaflet 채우기 규칙과 같음)
+// 짝홀 규칙 — 구멍과 여러 조각을 함께 처리
 function inZone(f, [lat, lng]) {
   const [x0, y0, x1, y1] = f.bb;
   if (lng < x0 || lng > x1 || lat < y0 || lat > y1) return false;
@@ -560,25 +599,41 @@ function inZone(f, [lat, lng]) {
 const zonesAt = ll => (zones || []).filter(f => inZone(f, ll));
 const zoneLabel = f => `${f.properties.n || '(이름 없음)'} · ${ZONE_CODE[f.properties.c] || f.properties.k}`;
 
-function zonePopup(latlng) {
-  const hit = zonesAt([latlng.lat, latlng.lng]);
+let popup = null;
+function closePopup() { popup?.setMap(null); popup = null; }
+function zonePopup(ll) {
+  closePopup();
+  const hit = zonesAt(ll);
   if (!hit.length) return;
-  L.popup({ maxWidth: 260 }).setLatLng(latlng)
-    .setContent(hit.map(f => `<div class="zp"><i style="background:${ZONE_COLOR[f.properties.k]}"></i>${esc(zoneLabel(f))}</div>`).join(''))
-    .openOn(map);
+  popup = overlay(ll, `<div class="zpop">${hit.map(f => `<div class="zp"><i style="background:${ZONE_COLOR[f.properties.k]}"></i>${esc(zoneLabel(f))}</div>`).join('')}</div>`,
+    { y: 1, z: 10, clickable: true });
 }
 
 async function setZones(on) {
   zonesOn = on;
   store.set('zonesOn', on);
   $('#btn-zones').classList.toggle('on', on);
-  if (!on) { map.removeLayer(zoneLayer); return; }
-  try { await loadZones(); } catch { return; }
-  if (zonesOn) zoneLayer.addTo(map);
+  if (on) {
+    try { await loadZones(); } catch { return; }
+  } else closePopup();
+  drawZones();
+  if (!on) return;
   const n = currentNote();
   if (n && !$('#sheet').hidden) showNote(n.name, false);
 }
 $('#btn-zones').onclick = () => setZones(!zonesOn);
+
+// ---------- 용도지역 (카카오 지적편집도 오버레이) ----------
+let districtOn = store.get('districtOn', false);
+function setDistrict(on) {
+  districtOn = on;
+  store.set('districtOn', on);
+  $('#btn-district').classList.toggle('on', on);
+  if (!map) return;
+  if (on) map.addOverlayMapTypeId(K.MapTypeId.USE_DISTRICT);
+  else map.removeOverlayMapTypeId(K.MapTypeId.USE_DISTRICT);
+}
+$('#btn-district').onclick = () => setDistrict(!districtOn);
 
 // ---------- 좌표 후보 (구역 이름 일치 · 카카오 주소/키워드 검색) ----------
 const normName = s => String(s).replace(/\s|제(?=\d)/g, '');
@@ -602,21 +657,9 @@ function zoneCandidates(n) {
     .map(f => ({ ll: centroid(f), label: zoneLabel(f), src: '정비구역 경계', zone: f }));
 }
 
-let kakaoReady = null;
-function loadKakao() {
-  kakaoReady ||= new Promise((ok, fail) => {
-    const s = document.createElement('script');
-    s.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(cfg.kakao)}&libraries=services&autoload=false`;
-    s.onload = () => window.kakao?.maps ? kakao.maps.load(ok) : fail(new Error('카카오 SDK 로드 실패'));
-    s.onerror = () => fail(new Error('카카오 SDK 로드 실패 — 키·도메인 등록·카카오맵 사용 설정 확인'));
-    document.head.append(s);
-  }).catch(e => { kakaoReady = null; throw e; });
-  return kakaoReady;
-}
-
 async function kakaoCandidates(n) {
-  await loadKakao();
-  const svc = kakao.maps.services;
+  if (!K?.services) throw new Error('카카오 지도를 못 불러와서 주소 검색 불가 — 연결·키 확인');
+  const svc = K.services;
   const call = (fn, ...a) => new Promise(r => fn(...a, (res, st) => r(st === svc.Status.OK ? res : [])));
   const out = [];
   const addr = String(n.fm.주소 || '').replace(/\(.*?\)/g, '').replace(/\s*(일대|일원)\s*$/, '').trim();
@@ -632,7 +675,8 @@ async function kakaoCandidates(n) {
 }
 
 let cands = [];
-const candLayer = L.layerGroup().addTo(map);
+const candObjs = [];
+const clearCand = () => map && clear(candObjs);
 
 async function findCandidates(n) {
   const box = $('#sheet-body .cands');
@@ -640,9 +684,7 @@ async function findCandidates(n) {
   const errs = [];
   let list = [];
   try { await loadZones(); list = zoneCandidates(n); } catch (e) { errs.push(e.message); }
-  if (cfg.kakao) {
-    try { list = list.concat(await kakaoCandidates(n)); } catch (e) { errs.push(e.message); }
-  }
+  try { list = list.concat(await kakaoCandidates(n)); } catch (e) { errs.push(e.message); }
   const c = regionCenter(n.region);
   if (c) for (const x of list) x.km = distKm(x.ll, c);
   cands = list.sort((a, b) => (a.km ?? 0) - (b.km ?? 0));
@@ -651,19 +693,19 @@ async function findCandidates(n) {
       <span>${esc(x.label)}<br><span class="sub">${esc(x.src)}${x.km != null ? ` · 지역 중심에서 ${x.km.toFixed(1)}km` : ''}</span></span>
       <button class="btn sm" data-act="cand-show" data-i="${i}">보기</button>
       <button class="btn sm primary" data-act="cand-use" data-i="${i}">저장</button></div>`).join('')
-    : `<p class="hint">후보 없음${cfg.kakao ? '' : ' — 설정에 카카오 키를 넣으면 주소로도 찾습니다'}. "위치 지정"으로 직접 찍어 주세요.</p>`)
+    : '<p class="hint">후보 없음. "위치 지정"으로 직접 찍어 주세요.</p>')
     + errs.map(m => `<p class="hint err">${esc(m)}</p>`).join('');
 }
 
 function showCandidate(x) {
-  candLayer.clearLayers();
-  L.marker(x.ll, { icon: L.divIcon({ className: 'cand-pin', iconSize: [18, 18] }), interactive: false, zIndexOffset: 900 }).addTo(candLayer);
+  if (!map) return;
+  clearCand();
+  candObjs.push(overlay(x.ll, '<div class="cand-pin"></div>', { z: 9 }));
   if (!x.zone) { focus(x.ll); return; }
-  const g = L.geoJSON(x.zone, { interactive: false, style: { color: '#111827', weight: 3, fillOpacity: 0.1 } }).addTo(candLayer);
+  candObjs.push(new K.Polygon({ map, path: zonePath(x.zone), strokeColor: '#111827', strokeWeight: 3, fillColor: '#111827', fillOpacity: 0.1 }));
   const sheetUp = window.innerWidth < 900;
-  map.flyToBounds(g.getBounds(), {
-    paddingTopLeft: [30, 70], paddingBottomRight: [sheetUp ? 30 : 470, sheetUp ? map.getSize().y * 0.55 : 30], maxZoom: 17, duration: 0.6,
-  });
+  fitTo(x.zone.geometry.coordinates.flat().map(([lng, lat]) => [lat, lng]),
+    [70, sheetUp ? 30 : 470, sheetUp ? mapEl.clientHeight * 0.55 : 30, 30], 3);
 }
 
 // ---------- 상세 시트 ----------
@@ -673,7 +715,7 @@ function nav(name) {
 }
 function route() {
   const m = location.hash.match(/^#note=(.+)$/);
-  candLayer.clearLayers();
+  clearCand();
   if (m) showNote(decodeURIComponent(m[1])); else $('#sheet').hidden = true;
 }
 window.addEventListener('popstate', route);
@@ -835,7 +877,7 @@ $('#sheet-body').onclick = async e => {
   if (act === 'cand-show') showCandidate(cands[e.target.dataset.i]);
   if (act === 'cand-use') {
     const x = cands[e.target.dataset.i];
-    candLayer.clearLayers();
+    clearCand();
     if (await save(n, { type: 'fields', fields: { location: fmtLL(x.ll) } }, '위치', '위치 저장됨')) showNote(n.name);
   }
   if (act === 'memo') {
@@ -887,10 +929,37 @@ $('#pick-gps').onclick = () => {
 
 // ---------- 새 장소 (지도 길게 누르기) ----------
 let newLL = null;
-map.on('contextmenu', e => openNew(e.latlng));
-function openNew(latlng) {
+// 카카오맵은 길게 누르기 이벤트가 없어서 직접 잰다. PC는 우클릭(contextmenu).
+let longPressAt = 0;
+function longPress(clientX, clientY) {
+  if (Date.now() - longPressAt < 1000) return;
+  longPressAt = Date.now();
+  const r = mapEl.getBoundingClientRect();
+  openNew(llOf(map.getProjection().coordsFromContainerPoint(new K.Point(clientX - r.left, clientY - r.top))));
+}
+if (map) {
+  let lp = null;
+  const cancel = () => { clearTimeout(lp?.timer); lp = null; };
+  mapEl.addEventListener('touchstart', e => {
+    cancel();
+    if (e.touches.length !== 1 || e.target.closest('.pin-wrap, .zpop')) return;
+    const { clientX: x, clientY: y } = e.touches[0];
+    lp = { x, y, timer: setTimeout(() => { lp = null; longPress(x, y); }, 600) };
+  }, { passive: true });
+  mapEl.addEventListener('touchmove', e => {
+    const t = e.touches[0];
+    if (lp && (e.touches.length !== 1 || Math.hypot(t.clientX - lp.x, t.clientY - lp.y) > 10)) cancel();
+  }, { passive: true });
+  mapEl.addEventListener('touchend', cancel);
+  mapEl.addEventListener('touchcancel', cancel);
+  mapEl.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    if (!e.target.closest('.pin-wrap, .zpop')) longPress(e.clientX, e.clientY);
+  });
+}
+function openNew(ll) {
   if (picking) return;
-  newLL = [latlng.lat, latlng.lng];
+  newLL = ll;
   const f = $('#new-form');
   f.reset();
   const cur = currentNote();
@@ -925,22 +994,29 @@ $('#new-form').onsubmit = async e => {
 
 // ---------- 내 위치 ----------
 let meMarker = null;
-$('#btn-locate').onclick = () => { setStatus('위치 찾는 중…'); map.locate({ setView: true, maxZoom: 16, enableHighAccuracy: true }); };
-map.on('locationfound', e => {
-  setStatus(null);
-  meMarker ??= L.marker(e.latlng, { icon: L.divIcon({ className: 'me', iconSize: [16, 16] }), zIndexOffset: 1000 }).addTo(map);
-  meMarker.setLatLng(e.latlng);
-});
-map.on('locationerror', e => setStatus(`위치 실패: ${e.message}`, true));
+$('#btn-locate').onclick = () => {
+  if (!map) return;
+  setStatus('위치 찾는 중…');
+  navigator.geolocation.getCurrentPosition(p => {
+    setStatus(null);
+    const ll = [p.coords.latitude, p.coords.longitude];
+    meMarker ??= overlay(ll, '<div class="me"></div>', { z: 20 });
+    meMarker.setPosition(LL(ll));
+    if (map.getLevel() > 4) map.setLevel(4);
+    map.panTo(LL(ll));
+  }, err => setStatus(`위치 실패: ${err.message}`, true), { enableHighAccuracy: true, timeout: 15000 });
+};
 
 // ---------- 설정 ----------
 const form = $('#settings-form');
 function fillSettings() { for (const k of CFG_KEYS) form.elements[k].value = cfg[k]; }
 form.onsubmit = e => {
   e.preventDefault();
+  const oldKakao = cfg.kakao;
   for (const k of CFG_KEYS) cfg[k] = form.elements[k].value.trim();
   cfg.repo ||= 'YeonkyunLee/imjang'; cfg.branch ||= 'main';
   store.set('cfg', cfg);
+  if (cfg.kakao !== oldKakao) { location.reload(); return; } // 지도 SDK는 시작할 때 그 키로 불러옴
   firstRender = true;
   togglePanel(null);
   load();
@@ -1147,5 +1223,9 @@ if ('serviceWorker' in navigator && (!onLocalhost || location.search.includes('s
 
 const imported = importFromHash();
 fillSettings();
-load().then(() => imported && setStatus(`토큰 저장됨${cfg.who ? ` (${cfg.who})` : ''} — 메뉴에서 "홈 화면에 추가"를 해 두세요`));
+load().then(() => {
+  if (imported) setStatus(`토큰 저장됨${cfg.who ? ` (${cfg.who})` : ''} — 메뉴에서 "홈 화면에 추가"를 해 두세요`);
+  else if (!map) setStatus('카카오 지도를 못 불러옴 (연결·카카오 키 확인) — 목록(☰)과 상세는 사용 가능', true);
+});
 if (zonesOn) setZones(true);
+if (districtOn) setDistrict(true);

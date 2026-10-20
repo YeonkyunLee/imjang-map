@@ -8,7 +8,6 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -18,6 +17,7 @@
   <button id="btn-list" title="목록">☰</button>
   <div id="title">임장 지도 <span id="count"></span></div>
   <button id="btn-zones" title="정비구역 경계">구역</button>
+  <button id="btn-district" title="용도지역 (지적편집도)">용도</button>
   <button id="btn-filter" title="필터">필터</button>
   <button id="btn-locate" title="내 위치">◎</button>
   <button id="btn-settings" title="설정">⚙</button>
@@ -42,7 +42,16 @@
       <span><i style="background:#1e8e3e"></i>주거환경</span>
       <span><i style="background:#80868b"></i>존치</span>
     </div>
-    <p class="hint">서울시 도시계획 결정 구역(2026-09 자료). 해제·완료된 구역이 남아 있거나 최근 지정분이 빠졌을 수 있습니다. 서울 밖(광명 등)은 없습니다. 구역을 누르면 이름이 나옵니다.</p>
+    <p class="hint">서울시 도시계획 결정 구역(2026-09 자료). 해제·완료된 구역이 남아 있거나 최근 지정분이 빠졌을 수 있습니다. 서울 밖(광명 등)은 없습니다. 지도를 확대해야 보이고, 구역을 누르면 이름이 나옵니다.</p>
+  </div>
+  <div class="fgroup"><h4>용도지역 (상단 "용도" 버튼, 카카오 지적편집도)</h4>
+    <div class="legend">
+      <span><i style="background:#f5e663"></i>주거</span>
+      <span><i style="background:#f4a6a6"></i>상업</span>
+      <span><i style="background:#c3a6e8"></i>공업</span>
+      <span><i style="background:#a8d8a0"></i>녹지</span>
+    </div>
+    <p class="hint">전국. 같은 계열 안에서 색이 진할수록 밀도가 높은 지역(예: 1종 → 3종 일반주거)입니다.</p>
   </div>
 </section>
 
@@ -79,7 +88,7 @@
       <div id="share-out"></div>
       <p class="hint">내 GitHub(YeonkyunLee)로 로그인된 상태에서 만듭니다. ①에서 Repository access → Only select → <b>imjang</b>만 고르고 Generate → 복사 → ②. 그 사람이 폰 카메라로 QR을 찍으면 앱이 열리면서 토큰과 이름이 저장되고, 거기서 홈 화면에 추가하면 됩니다. QR은 토큰과 같으니 그 자리에서만 보여주고 닫으세요. 끊으려면 GitHub 토큰 목록에서 <b>imjang-map-이름</b> 토큰을 삭제합니다.</p>
     </details>
-    <label>카카오 JavaScript 키 (선택) <input name="kakao" autocomplete="off" placeholder="좌표 없는 장소를 주소로 찾을 때"></label>
+    <label>카카오 JavaScript 키 (선택) <input name="kakao" autocomplete="off" placeholder="비워 두면 앱 기본 키"></label>
     <div class="row">
       <button type="submit" class="btn primary">저장하고 다시 불러오기</button>
       <button type="button" id="cache-clear" class="btn">캐시 지우기</button>
@@ -133,10 +142,27 @@
   <div id="sheet-body"></div>
 </section>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
-<script src="app.js"></script>
+<script>
+// 카카오맵 SDK를 받은 뒤 앱을 시작. 못 받으면(오프라인·키 문제) 지도 없이 시작.
+// JS 키는 공개용(카카오 콘솔에 등록한 도메인에서만 동작), 설정에서 바꿀 수 있음
+(function () {
+  var key = '8ac8089cb9a67c5bcb53463b0abecacb', started = false;
+  try { key = JSON.parse(localStorage.getItem('cfg') || '{}').kakao || key; } catch (e) {}
+  function start() {
+    if (started) return;
+    started = true;
+    document.body.appendChild(document.createElement('script')).src = 'app.js';
+  }
+  var s = document.createElement('script');
+  s.src = 'https://dapi.kakao.com/v2/maps/sdk.js?appkey=' + encodeURIComponent(key) + '&libraries=services&autoload=false';
+  s.onload = function () { window.kakao && kakao.maps && kakao.maps.load ? kakao.maps.load(start) : start(); };
+  s.onerror = start;
+  setTimeout(start, 10000); // 본체 스크립트가 끝내 안 오면
+  document.head.appendChild(s);
+})();
+</script>
 </body>
 </html>
