@@ -10,13 +10,13 @@ const FILTERS = {
   상태: ['계획', '다녀옴', '제외'],
   유형: ['아파트', '재건축', '재개발구역', '도시형생활주택', '미확인'],
   평가: ['1순위', '추천', '후보', '탈락', '미평가'],
-  시세: ['~10억', '10~15억', '15~20억', '20~25억', '25억~', '시세 없음'],
+  시세: ['1~5억', '5~10억', '10~15억', '15~20억', '20~25억', '25억~', '시세 없음'],
 };
 // 시세(억, 대표평형) → 금액대. 경계값은 위 구간에 넣음 (15억 → 15~20억)
 function priceBand(v) {
   const x = parseFloat(String(v ?? '').replace(/,/g, ''));
   if (!Number.isFinite(x) || x <= 0) return '시세 없음';
-  return x < 10 ? '~10억' : x < 15 ? '10~15억' : x < 20 ? '15~20억' : x < 25 ? '20~25억' : '25억~';
+  return x < 5 ? '1~5억' : x < 10 ? '5~10억' : x < 15 ? '10~15억' : x < 20 ? '15~20억' : x < 25 ? '20~25억' : '25억~';
 }
 
 // ---------- 저장 (localStorage는 실패할 수 있음) ----------
@@ -321,6 +321,8 @@ let notes = [];
 const byName = new Map();
 let firstRender = true;
 const filters = Object.fromEntries(Object.keys(FILTERS).map(k => [k, new Set(store.get('filters', {})[k] || [])]));
+// 선택지가 바뀐 뒤 저장돼 있던 옛 값(예: '~10억')은 버린다 — 남아 있으면 아무것도 안 보임
+for (const [k, s] of Object.entries(filters)) if (FILTERS[k]) for (const v of s) if (!FILTERS[k].includes(v)) s.delete(v);
 const saveFilters = () => store.set('filters', Object.fromEntries(Object.entries(filters).map(([k, s]) => [k, [...s]])));
 const places = () => notes.filter(n => n.isPlace);
 const fieldOf = (n, k) => k === '평가' ? n.rating : k === '지역' ? n.region : k === '시세' ? priceBand(n.fm.시세) : n.fm[k];
@@ -792,7 +794,8 @@ function showNote(name, doFocus = true) {
   const inZones = n.ll ? zonesAt(n.ll) : [];
   const acts = [
     n.ll && `<button class="btn" data-act="focus">지도에서 보기</button>`,
-    n.ll && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/to/${q},${n.ll[0]},${n.ll[1]}">길찾기</a>`,
+    n.ll && `<button class="btn" data-act="walk">도보 길찾기</button>`,
+    n.ll && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/to/${q},${n.ll[0]},${n.ll[1]}">대중교통·차 (카카오맵)</a>`,
     n.isPlace && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/search/${encodeURIComponent(f.주소 ? String(f.주소).replace(/\s*\(.*\)$/, '') : n.name)}">카카오맵 검색</a>`,
     n.isPlace && `<a class="btn" target="_blank" rel="noopener" href="https://m.land.naver.com/search/result/${q}">네이버부동산</a>`,
     n.isPlace && `<button class="btn" data-act="pick">${n.ll ? '위치 수정' : '위치 지정'}</button>`,
@@ -904,6 +907,7 @@ $('#sheet-body').onclick = async e => {
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (act === 'focus' && n.ll) focus(n.ll);
   if (act === 'pick') startPick(n);
+  if (act === 'walk') walkTo(n);
   if (act === 'cands') findCandidates(n);
   if (act === 'cand-show') showCandidate(cands[e.target.dataset.i]);
   if (act === 'cand-use') {
@@ -1037,6 +1041,45 @@ $('#btn-locate').onclick = () => {
     map.panTo(LL(ll));
   }, err => setStatus(`위치 실패: ${err.message}`, true), { enableHighAccuracy: true, timeout: 15000 });
 };
+
+// ---------- 도보 길찾기 (내 위치 → 장소, OSM 도보 경로 routing.openstreetmap.de · 키 없음) ----------
+let walkObjs = [];
+function clearWalk() { clear(walkObjs); $('#walkbar').hidden = true; }
+$('#walk-close').onclick = clearWalk;
+
+function myPosition() {
+  return new Promise((ok, fail) => navigator.geolocation.getCurrentPosition(
+    p => ok([p.coords.latitude, p.coords.longitude]),
+    e => fail(new Error(`위치 실패: ${e.message}`)), { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }));
+}
+
+async function walkTo(n) {
+  if (!map) { setStatus('지도가 없어 경로를 그릴 수 없습니다', true); return; }
+  try {
+    setStatus('내 위치 찾는 중…');
+    const from = await myPosition();
+    meMarker ??= overlay(from, '<div class="me"></div>', { z: 20 });
+    meMarker.setPosition(LL(from));
+    setStatus('경로 찾는 중…');
+    const url = `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${from[1]},${from[0]};${n.ll[1]},${n.ll[0]}?overview=full&geometries=geojson`;
+    const r = await net(url);
+    const j = r.ok ? await r.json() : null;
+    if (j?.code !== 'Ok' || !j.routes?.length) throw new Error('도보 경로를 못 찾았습니다');
+    const rt = j.routes[0];
+    const path = rt.geometry.coordinates.map(([x, y]) => [y, x]);
+    clear(walkObjs);
+    walkObjs.push(new K.Polyline({ map, path: path.map(LL), strokeColor: '#1a73e8', strokeWeight: 6, strokeOpacity: 0.85 }));
+    const min = Math.round(rt.distance / 1000 / 4.2 * 60); // 보행 시속 약 4.2km
+    const dist = rt.distance < 1000 ? `${Math.round(rt.distance)}m` : `${(rt.distance / 1000).toFixed(1)}km`;
+    $('#walk-text').textContent = `${n.name}까지 도보 ${dist} · 약 ${min < 60 ? `${min}분` : `${Math.floor(min / 60)}시간 ${min % 60}분`}`;
+    $('#walkbar').hidden = false;
+    setStatus(null);
+    const sheetOpen = !$('#sheet').hidden, wide = window.innerWidth >= 900;
+    fitTo([from, n.ll, ...path], [110, 40, sheetOpen && !wide ? mapEl.clientHeight * 0.55 : 40, sheetOpen && wide ? 470 : 40], 3);
+  } catch (e) {
+    setStatus(e.offline ? '오프라인 — 도보 길찾기는 연결이 필요합니다' : e.message, true);
+  }
+}
 
 // ---------- 설정 ----------
 const form = $('#settings-form');

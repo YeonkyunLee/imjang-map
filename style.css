@@ -185,3 +185,11 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 #install-help ol { padding-left: 20px; line-height: 1.8; }
 
 .fgroup h4 .n { font-weight: 400; font-size: 11px; margin-left: 4px; }
+/* 도보 길찾기 (동선 바가 있으면 그 아래) */
+#walkbar { position: fixed; top: calc(58px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 960;
+  width: min(440px, calc(100% - 24px)); display: flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px; border-radius: 12px;
+  background: var(--bg); box-shadow: var(--shadow); font-size: 14px; border-left: 4px solid #1a73e8; }
+#walk-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#routebar:not([hidden]) ~ #walkbar { top: calc(112px + env(safe-area-inset-top)); }
+#walkbar:not([hidden]) ~ #status { top: calc(112px + env(safe-area-inset-top)); }
+#routebar:not([hidden]) ~ #walkbar:not([hidden]) ~ #status { top: calc(166px + env(safe-area-inset-top)); }
