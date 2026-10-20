@@ -10,7 +10,14 @@ const FILTERS = {
   상태: ['계획', '다녀옴', '제외'],
   유형: ['아파트', '재건축', '재개발구역', '도시형생활주택', '미확인'],
   평가: ['1순위', '추천', '후보', '탈락', '미평가'],
+  시세: ['~10억', '10~15억', '15~20억', '20~25억', '25억~', '시세 없음'],
 };
+// 시세(억, 대표평형) → 금액대. 경계값은 위 구간에 넣음 (15억 → 15~20억)
+function priceBand(v) {
+  const x = parseFloat(String(v ?? '').replace(/,/g, ''));
+  if (!Number.isFinite(x) || x <= 0) return '시세 없음';
+  return x < 10 ? '~10억' : x < 15 ? '10~15억' : x < 20 ? '15~20억' : x < 25 ? '20~25억' : '25억~';
+}
 
 // ---------- 저장 (localStorage는 실패할 수 있음) ----------
 const store = {
@@ -316,7 +323,7 @@ let firstRender = true;
 const filters = Object.fromEntries(Object.keys(FILTERS).map(k => [k, new Set(store.get('filters', {})[k] || [])]));
 const saveFilters = () => store.set('filters', Object.fromEntries(Object.entries(filters).map(([k, s]) => [k, [...s]])));
 const places = () => notes.filter(n => n.isPlace);
-const fieldOf = (n, k) => k === '평가' ? n.rating : k === '지역' ? n.region : n.fm[k];
+const fieldOf = (n, k) => k === '평가' ? n.rating : k === '지역' ? n.region : k === '시세' ? priceBand(n.fm.시세) : n.fm[k];
 const passes = n => Object.entries(filters).every(([k, s]) => !s.size || s.has(fieldOf(n, k)));
 
 // ---------- 지도 (카카오맵. SDK는 index.html에서 동기 로드 — 실패하면 지도 없이 목록·상세만) ----------
@@ -433,7 +440,7 @@ function drawFilters() {
   const all = places();
   FILTERS.지역 = [...new Set(all.map(n => n.region))].sort((a, b) => a.localeCompare(b, 'ko'));
   $('#filter-groups').innerHTML = Object.entries(FILTERS).map(([k, opts]) => `
-    <div class="fgroup"><h4>${k}</h4><div class="chips">${opts.map(o => {
+    <div class="fgroup"><h4>${k === '시세' ? '시세 <span class="n">대표평형 최근 실거래, 여러 개 고르면 합쳐서</span>' : k}</h4><div class="chips">${opts.map(o => {
       const cnt = all.filter(n => fieldOf(n, k) === o).length;
       const sample = k === '평가' ? pinHtml({ fm: {}, rating: o }, true)
         : k === '유형' ? pinHtml({ fm: { 유형: o }, rating: '미평가' }, true) : '';
