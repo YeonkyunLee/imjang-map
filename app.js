@@ -397,6 +397,30 @@ function togglePanel(name, force) {
 $('#btn-filter').onclick = () => togglePanel('filter');
 $('#btn-list').onclick = () => togglePanel('list');
 $('#btn-settings').onclick = () => togglePanel('settings');
+// 왼쪽 패널은 왼쪽으로 밀어서 닫기 (손가락을 따라 움직이다가 80px 넘게 밀면 닫힘)
+for (const sel of Object.values(panels)) {
+  const el = $(sel);
+  let s = null;
+  el.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    s = e.touches.length === 1 ? { x: t.clientX, y: t.clientY, dx: 0, h: null } : null;
+  }, { passive: true });
+  el.addEventListener('touchmove', e => {
+    if (!s) return;
+    const t = e.touches[0];
+    s.dx = t.clientX - s.x;
+    s.h ??= Math.abs(s.dx) > 8 || Math.abs(t.clientY - s.y) > 8 ? Math.abs(s.dx) > Math.abs(t.clientY - s.y) : null;
+    if (s.h) { el.style.transition = 'none'; el.style.transform = `translateX(${Math.min(0, s.dx)}px)`; }
+  }, { passive: true });
+  el.addEventListener('touchend', () => {
+    if (!s) return;
+    const close = s.h && s.dx < -80;
+    el.style.transition = el.style.transform = '';
+    s = null;
+    if (close) togglePanel(null);
+  });
+  el.addEventListener('touchcancel', () => { s = null; el.style.transition = el.style.transform = ''; });
+}
 function mapClick(ll) {
   if (Date.now() - longPressAt < 800) return; // 길게 누른 손을 뗄 때 오는 클릭
   if (picking) { pickAt(ll); return; }
