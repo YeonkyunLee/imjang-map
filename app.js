@@ -19,11 +19,12 @@ const store = {
   del(k) { try { localStorage.removeItem(k); } catch {} },
 };
 const onLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
-const CFG_KEYS = ['source', 'repo', 'branch', 'token', 'kakao'];
+const CFG_KEYS = ['source', 'repo', 'branch', 'token', 'kakao', 'who'];
 const cfg = Object.assign(
-  { source: onLocalhost ? 'local' : 'github', repo: 'YeonkyunLee/imjang', branch: 'main', token: '', kakao: '' },
+  { source: onLocalhost ? 'local' : 'github', repo: 'YeonkyunLee/imjang', branch: 'main', token: '', kakao: '', who: '' },
   store.get('cfg', {}),
 );
+const appTag = () => (cfg.who ? `앱(${cfg.who})` : '앱');
 const cacheKey = () => `notes:${cfg.source}:${cfg.repo}:${cfg.branch}`;
 
 // ---------- 데이터 출처 ----------
@@ -782,7 +783,7 @@ async function addPhotos(n, files) {
     for (const [i, f] of [...files].entries()) {
       setStatus(`사진 ${i + 1}/${files.length} 줄이는 중…`);
       const path = `첨부/${base}-${stamp}${files.length > 1 ? `-${i + 1}` : ''}.jpg`;
-      const r = await submit({ kind: 'upload', path, data: await shrink(f), message: `앱: ${n.name} 사진` });
+      const r = await submit({ kind: 'upload', path, data: await shrink(f), message: `${appTag()}: ${n.name} 사진` });
       queued ||= r === 'queued';
       paths.push(path);
     }
@@ -810,7 +811,7 @@ async function save(n, change, message, okMsg) {
   box?.classList.add('busy');
   setStatus('저장 중…');
   try {
-    const r = await submit({ kind: 'edit', path: n.path, change, message: `앱: ${n.name} ${message}` });
+    const r = await submit({ kind: 'edit', path: n.path, change, message: `${appTag()}: ${n.name} ${message}` });
     setStatus(r === 'queued' ? QUEUED_MSG : okMsg || '저장됨');
     return true;
   } catch (err) {
@@ -911,7 +912,7 @@ $('#new-form').onsubmit = async e => {
   setStatus('저장 중…');
   try {
     const text = newNoteText({ name, region, type: el.type.value, addr: el.addr.value.trim(), ll: newLL, memo: el.memo.value });
-    const r = await submit({ kind: 'create', path: `${region}/${name}.md`, text, message: `앱: ${name} 추가` });
+    const r = await submit({ kind: 'create', path: `${region}/${name}.md`, text, message: `${appTag()}: ${name} 추가` });
     togglePanel(null);
     setStatus(r === 'queued' ? QUEUED_MSG : '추가됨');
     nav(name);
@@ -959,6 +960,62 @@ $('#token-paste').onclick = async () => {
     setStatus('붙여넣기 권한이 없어요 — 토큰 칸을 길게 눌러 붙여넣으세요', true);
   }
 };
+// 다른 사람과 같이 쓰기: 내 계정으로 그 사람용 토큰을 만들고, QR(앱 주소#t=토큰&who=이름)로 넘긴다.
+// #뒤는 서버로 가지 않음. 받은 쪽은 시작할 때 읽어 저장하고 주소에서 지운다.
+const shareName = () => $('#share-name').value.trim().replace(/[^\p{L}\p{N}_-]+/gu, '-').slice(0, 25);
+function syncShareLink() {
+  $('#share-new').href = 'https://github.com/settings/personal-access-tokens/new?' + new URLSearchParams({
+    name: `imjang-map-${shareName() || '공유'}`, description: `임장 지도 앱 공유: ${shareName() || '다른 사람'}`,
+    target_name: cfg.repo.split('/')[0] || 'YeonkyunLee', expires_in: '366', contents: 'write',
+  });
+}
+$('#share-name').oninput = syncShareLink;
+$('#share-name').onkeydown = e => e.key === 'Enter' && e.preventDefault();
+syncShareLink();
+
+let qrLib = null;
+const loadQr = () => (qrLib ||= new Promise((ok, fail) => {
+  const s = Object.assign(document.createElement('script'), { src: 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js' });
+  s.onload = () => ok(window.qrcode);
+  s.onerror = () => { qrLib = null; fail(new Error('QR 라이브러리를 못 불러옴 — 연결 확인')); };
+  document.head.append(s);
+}));
+
+$('#share-qr').onclick = async () => {
+  const input = $('#share-token');
+  if (!input.value.trim()) {
+    try { input.value = (await navigator.clipboard.readText()).trim(); } catch {}
+  }
+  const t = input.value.trim();
+  if (!/^(github_pat_|ghp_)\w+$/.test(t)) { setStatus('그 사람용 토큰을 복사한 뒤 다시 누르세요 (또는 아래 칸에 붙여넣기)', true); return; }
+  if (t === cfg.token) { setStatus('내 토큰이 아니라 ①에서 새로 만든 토큰이어야 합니다', true); return; }
+  try {
+    const qrcode = await loadQr();
+    const url = `${location.origin}${location.pathname}#t=${encodeURIComponent(t)}${shareName() ? `&who=${encodeURIComponent(shareName())}` : ''}`;
+    const qr = qrcode(0, 'M');
+    qr.addData(url);
+    qr.make();
+    $('#share-out').innerHTML = `<div class="qr">${qr.createSvgTag({ cellSize: 5, margin: 4, scalable: true })}</div>
+      <p class="hint">${esc(shareName() || '그 사람')}의 폰 카메라로 찍게 하세요.</p>
+      <button type="button" class="btn" id="share-close">다 됐으면 QR 지우기</button>`;
+  } catch (e) { setStatus(e.message, true); }
+};
+$('#share-out').onclick = e => {
+  if (e.target.id !== 'share-close') return;
+  $('#share-out').innerHTML = ''; $('#share-token').value = ''; $('#share-name').value = ''; syncShareLink();
+};
+
+function importFromHash() {
+  const m = location.hash.match(/^#t=([^&]+)(?:&who=([^&]*))?$/);
+  if (!m) return false;
+  cfg.source = 'github';
+  cfg.token = decodeURIComponent(m[1]);
+  if (m[2]) cfg.who = decodeURIComponent(m[2]);
+  store.set('cfg', cfg);
+  history.replaceState(null, '', location.pathname + location.search);
+  return true;
+}
+
 $('#cache-clear').onclick = () => {
   Object.keys(localStorage).filter(k => k.startsWith('notes:')).forEach(store.del);
   setStatus('캐시를 지웠습니다');
@@ -1039,6 +1096,7 @@ if ('serviceWorker' in navigator && (!onLocalhost || location.search.includes('s
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
+const imported = importFromHash();
 fillSettings();
-load();
+load().then(() => imported && setStatus(`토큰 저장됨${cfg.who ? ` (${cfg.who})` : ''} — 메뉴에서 "홈 화면에 추가"를 해 두세요`));
 if (zonesOn) setZones(true);

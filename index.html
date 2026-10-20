@@ -67,6 +67,18 @@
       <button type="button" id="token-paste" class="btn">② 붙여넣기</button>
     </div>
     <p class="hint"><b>GitHub에 개인 계정(YeonkyunLee)으로 로그인된 상태여야 합니다.</b> 다른 계정이면 GitHub 오른쪽 위 프로필 → Switch account / Add account로 바꾼 뒤 ①을 다시 누르세요.<br>①을 누르면 이름·권한(Contents 읽기/쓰기)·기간(1년)이 채워진 GitHub 화면이 열립니다. Repository access에서 "Only select repositories" → <b>imjang</b>만 고르고 Generate → 토큰 복사 → 돌아와서 ② → 저장. 토큰은 이 브라우저에만 저장됩니다.</p>
+    <label>기록자 이름 (선택) <input name="who" autocomplete="off" placeholder="커밋에 '앱(이름)'으로 표시"></label>
+    <details id="share">
+      <summary>다른 사람과 같이 쓰기</summary>
+      <label>그 사람 이름 <input id="share-name" autocomplete="off" placeholder="예: 배우자"></label>
+      <div class="row">
+        <a id="share-new" class="btn" target="_blank" rel="noopener">① 그 사람용 토큰 만들기</a>
+        <button type="button" id="share-qr" class="btn">② 붙여넣고 QR 만들기</button>
+      </div>
+      <input id="share-token" type="password" autocomplete="off" placeholder="붙여넣기가 안 되면 여기에 토큰을 길게 눌러 붙여넣기">
+      <div id="share-out"></div>
+      <p class="hint">내 GitHub(YeonkyunLee)로 로그인된 상태에서 만듭니다. ①에서 Repository access → Only select → <b>imjang</b>만 고르고 Generate → 복사 → ②. 그 사람이 폰 카메라로 QR을 찍으면 앱이 열리면서 토큰과 이름이 저장되고, 거기서 홈 화면에 추가하면 됩니다. QR은 토큰과 같으니 그 자리에서만 보여주고 닫으세요. 끊으려면 GitHub 토큰 목록에서 <b>imjang-map-이름</b> 토큰을 삭제합니다.</p>
+    </details>
     <label>카카오 JavaScript 키 (선택) <input name="kakao" autocomplete="off" placeholder="좌표 없는 장소를 주소로 찾을 때"></label>
     <div class="row">
       <button type="submit" class="btn primary">저장하고 다시 불러오기</button>
