@@ -373,7 +373,7 @@ function focus(ll) {
 }
 
 // ---------- 패널 ----------
-const panels = { filter: '#panel-filter', list: '#panel-list', settings: '#panel-settings', new: '#panel-new' };
+const panels = { filter: '#panel-filter', list: '#panel-list', settings: '#panel-settings', new: '#panel-new', install: '#panel-install' };
 function togglePanel(name, force) {
   for (const [k, sel] of Object.entries(panels)) {
     const open = k === name ? (force ?? $(sel).hidden) : false;
@@ -1090,6 +1090,55 @@ async function load() {
     if (!cfg.token && cfg.source === 'github') togglePanel('settings', true);
   }
 }
+
+// ---------- 홈 화면 설치 ----------
+// Chrome·삼성 인터넷·Edge는 beforeinstallprompt로 설치 창을 직접 띄우고, 안 되는 브라우저(아이폰 등)는 방법을 보여준다.
+const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+let installEvt = null;
+const setBar = hidden => { $('#installbar').hidden = hidden; document.body.classList.toggle('has-installbar', !hidden); };
+function syncInstall() {
+  const done = standalone();
+  $('#install-btn').hidden = done;
+  setBar(done || store.get('installLater', 0) > Date.now());
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; syncInstall(); });
+window.addEventListener('appinstalled', () => {
+  installEvt = null;
+  setBar(true);
+  setStatus('설치됨 — 이제 홈 화면 아이콘으로 여세요');
+});
+
+function installHelp() {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/.test(ua)) {
+    return /CriOS|FxiOS|EdgiOS/.test(ua)
+      ? '<p>아이폰은 <b>Safari</b>에서만 설치됩니다. 이 주소를 Safari로 열어 주세요.</p>'
+      : '<ol><li>화면 아래 <b>공유 버튼</b>(네모에서 위로 화살표)</li><li>목록을 내려 <b>홈 화면에 추가</b></li><li>오른쪽 위 <b>추가</b></li></ol>';
+  }
+  if (/SamsungBrowser/.test(ua)) return '<ol><li>오른쪽 아래 <b>≡</b> 메뉴</li><li><b>현재 페이지 추가</b> → <b>홈 화면</b></li></ol>';
+  if (/KAKAOTALK|NAVER|Instagram|FBAN|Line\//.test(ua)) return '<p>앱 안의 브라우저에서는 설치가 안 됩니다. 오른쪽 위 메뉴에서 <b>다른 브라우저로 열기</b>(Chrome)를 누른 뒤 다시 설치하세요.</p>';
+  return '<ol><li>오른쪽 위 <b>⋮</b> 메뉴</li><li><b>홈 화면에 추가</b> 또는 <b>앱 설치</b></li><li><b>설치</b></li></ol>';
+}
+
+async function install() {
+  if (installEvt) {
+    const evt = installEvt;
+    installEvt = null; // 한 번만 쓸 수 있음
+    try {
+      await evt.prompt();
+      if ((await evt.userChoice).outcome === 'accepted') setBar(true);
+      return;
+    } catch { /* 설치 창을 못 띄우면 방법 안내로 */ }
+  }
+  $('#install-help').innerHTML = installHelp()
+    + '<p class="hint">설치 후에는 홈 화면의 "임장" 아이콘으로 여세요. 토큰은 지금 이 브라우저에 저장돼 있어서, 같은 브라우저로 설치해야 다시 넣지 않아도 됩니다.</p>';
+  togglePanel('install', true);
+}
+$('#install-go').onclick = install;
+$('#install-btn').onclick = install;
+$('#install-close').onclick = () => togglePanel(null);
+$('#install-later').onclick = () => { store.set('installLater', Date.now() + 7 * 864e5); setBar(true); };
+syncInstall();
 
 // 홈 화면 설치·오프라인. localhost에서는 개발 중 캐시 혼동을 피해 ?sw 를 붙였을 때만.
 if ('serviceWorker' in navigator && (!onLocalhost || location.search.includes('sw'))) {

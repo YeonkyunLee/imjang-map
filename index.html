@@ -83,6 +83,7 @@
     <div class="row">
       <button type="submit" class="btn primary">저장하고 다시 불러오기</button>
       <button type="button" id="cache-clear" class="btn">캐시 지우기</button>
+      <button type="button" id="install-btn" class="btn">홈 화면에 설치</button>
     </div>
   </form>
   <div id="load-info"></div>
@@ -105,6 +106,17 @@
       <button type="button" id="new-cancel" class="btn">취소</button>
     </div>
   </form>
+</section>
+
+<div id="installbar" hidden>
+  <span>홈 화면에 설치하면 앱처럼 바로 열려요</span>
+  <button id="install-go" class="btn primary">설치</button>
+  <button id="install-later" class="btn" title="닫기">✕</button>
+</div>
+<section id="panel-install" class="panel" hidden>
+  <h3>홈 화면에 설치</h3>
+  <div id="install-help"></div>
+  <button type="button" id="install-close" class="btn">닫기</button>
 </section>
 
 <div id="pickbar" hidden>
