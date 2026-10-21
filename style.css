@@ -79,10 +79,6 @@ button, input, select { font: inherit; color: inherit; }
 .pin-wrap { position: relative; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 .pin { width: 20px; height: 20px; background: var(--c); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .45);
   display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: 700; line-height: 1; }
-.pin.circ { border-radius: 50%; }
-.pin.sq { border-radius: 3px; }
-.pin.dia { transform: rotate(45deg) scale(.88); border-radius: 2px; }
-.pin.dia span { transform: rotate(-45deg); }
 .pin.out { opacity: .4; }
 .pin.mini { width: 12px; height: 12px; border-width: 1px; box-shadow: none; flex: none; }
 .lbl { display: none; position: absolute; left: 24px; top: 50%; transform: translateY(-50%); white-space: nowrap;
@@ -193,3 +189,29 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 #routebar:not([hidden]) ~ #walkbar { top: calc(112px + env(safe-area-inset-top)); }
 #walkbar:not([hidden]) ~ #status { top: calc(112px + env(safe-area-inset-top)); }
 #routebar:not([hidden]) ~ #walkbar:not([hidden]) ~ #status { top: calc(166px + env(safe-area-inset-top)); }
+
+/* 유형 아이콘 마커 (색 = 금액대 또는 평가) */
+.pin-wrap { width: 28px; height: 28px; }
+.pin { position: relative; width: 26px; height: 26px; background: var(--c); border: 2px solid #fff; border-radius: 50%; box-sizing: border-box;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; transform: none; }
+.pin svg { width: 15px; height: 15px; fill: #fff; }
+.pin.zone { border-radius: 6px; border-style: dashed; }
+.pin.out { opacity: .4; }
+.pin.mini { width: 16px; height: 16px; border-width: 1px; box-shadow: none; flex: none; }
+.pin.mini.zone { border-radius: 4px; }
+.pin.mini svg { width: 10px; height: 10px; }
+.pb { position: absolute; top: -6px; right: -6px; width: 13px; height: 13px; border-radius: 50%; border: 1px solid #fff;
+  font-size: 9px; line-height: 12px; text-align: center; color: #fff; font-weight: 700; font-style: normal; }
+.pb.ok { background: #188038; }
+.pb.star { right: auto; left: -6px; background: #d93025; }
+.lbl { left: 30px; }
+.dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; flex: none; }
+#color-by { margin-bottom: 12px; }
+
+/* 아래쪽 범례 */
+#legendbar { position: fixed; left: 8px; right: 8px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 790; padding: 6px 10px;
+  border-radius: 10px; background: var(--bg); box-shadow: var(--shadow); font-size: 11px; display: flex; flex-direction: column; gap: 4px; }
+.has-installbar #legendbar { bottom: calc(72px + env(safe-area-inset-bottom)); }
+.lg-row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 10px; }
+.lg-row b { font-weight: 700; margin-right: 2px; }
+.lg-row i { display: inline-block; width: 11px; height: 11px; border-radius: 2px; vertical-align: -1px; margin-right: 4px; box-sizing: border-box; opacity: .9; }

@@ -359,12 +359,27 @@ if (map) {
   syncLabels();
 }
 
-function pinHtml(n, mini) {
-  const shape = n.fm.유형 === '재건축' ? 'sq' : n.fm.유형 === '재개발구역' ? 'dia' : 'circ';
-  const cls = ['pin', shape, mini && 'mini', n.fm.상태 === '제외' && 'out'].filter(Boolean).join(' ');
-  const mark = !mini && n.fm.상태 === '다녀옴' ? '<span>✓</span>' : '';
-  return `<div class="${cls}" style="--c:${RATING_COLOR[n.rating] || RATING_COLOR.미평가}">${mark}</div>`;
+// 마커: 모양·아이콘 = 유형, 색 = 금액대(기본) 또는 평가. ✓ 다녀옴, ★ 1순위(금액대 색일 때)
+const PRICE_COLOR = { '1~5억': '#2e7d32', '5~10억': '#7cb342', '10~15억': '#f9a825', '15~20억': '#fb8c00', '20~25억': '#e53935', '25억~': '#8e24aa', '시세 없음': '#78909c' };
+let colorBy = store.get('colorBy', '시세'); // '시세' | '평가'
+const ICON = {
+  아파트: '<path d="M4 21V3h10v5h6v13H4zm2-2h2v-2H6v2zm0-4h2v-2H6v2zm0-4h2V9H6v2zm0-4h2V5H6v2zm4 12h2v-2h-2v2zm0-4h2v-2h-2v2zm0-4h2V9h-2v2zm0-4h2V5h-2v2zm6 12h2v-2h-2v2zm0-4h2v-2h-2v2zm0-4h2v-2h-2v2z"/>',
+  재건축: '<path d="M2 21V5h9v16H2zm2-2h1.6v-2H4v2zm0-4h1.6v-2H4v2zm0-4h1.6V9H4v2zm3.4 8H9v-2H7.4v2zm0-4H9v-2H7.4v2zm0-4H9V9H7.4v2z"/><path d="M17.5 6.2V4l3.6 3.3-3.6 3.3V8.3a3.2 3.2 0 1 0 3.1 4l2 .5a5.3 5.3 0 1 1-5.1-6.6z"/>',
+  재개발구역: '<path d="M2 2h5v2.2H4.2V7H2V2zm15 0h5v5h-2.2V4.2H17V2zM2 17h2.2v2.8H7V22H2v-5zm17.8 2.8V17H22v5h-5v-2.2h2.8zM10 2h4v2.2h-4V2zm0 17.8h4V22h-4v-2.2zM2 10h2.2v4H2v-4zm17.8 0H22v4h-2.2v-4z"/><path d="M7 17v-5.5L12 7l5 4.5V17h-3.5v-3h-3v3H7z"/>',
+  도시형생활주택: '<path d="M12 3l9 8h-2.5v9h-5v-6h-3v6h-5v-9H3l9-8z"/>',
+  미확인: '<path d="M11 18h2v2h-2v-2zm1-14a5 5 0 0 1 5 5c0 2.2-1.6 3.1-2.5 3.8-.8.6-1.5 1.1-1.5 2.2v.5h-2V15c0-2 1.2-2.9 2.2-3.6.9-.7 1.8-1.2 1.8-2.4a3 3 0 0 0-6 0H7a5 5 0 0 1 5-5z"/>',
+};
+function pinMarkup({ type, color, mini, out, visited, star }) {
+  const t = ICON[type] ? type : '미확인';
+  const cls = ['pin', t === '재개발구역' ? 'zone' : 'round', mini && 'mini', out && 'out'].filter(Boolean).join(' ');
+  const badges = mini ? '' : (visited ? '<b class="pb ok">✓</b>' : '') + (star ? '<b class="pb star">★</b>' : '');
+  return `<div class="${cls}" style="--c:${color}"><svg viewBox="0 0 24 24">${ICON[t]}</svg>${badges}</div>`;
 }
+const pinColor = n => (colorBy === '평가' ? RATING_COLOR[n.rating] || RATING_COLOR.미평가 : PRICE_COLOR[priceBand(n.fm.시세)]);
+const pinHtml = (n, mini) => pinMarkup({
+  type: n.fm.유형, color: pinColor(n), mini, out: n.fm.상태 === '제외',
+  visited: n.fm.상태 === '다녀옴', star: colorBy !== '평가' && n.rating === '1순위',
+});
 
 function drawMarkers() {
   const shown = places().filter(passes);
@@ -444,8 +459,9 @@ function drawFilters() {
   $('#filter-groups').innerHTML = Object.entries(FILTERS).map(([k, opts]) => `
     <div class="fgroup"><h4>${k === '시세' ? '시세 <span class="n">대표평형 최근 실거래, 여러 개 고르면 합쳐서</span>' : k}</h4><div class="chips">${opts.map(o => {
       const cnt = all.filter(n => fieldOf(n, k) === o).length;
-      const sample = k === '평가' ? pinHtml({ fm: {}, rating: o }, true)
-        : k === '유형' ? pinHtml({ fm: { 유형: o }, rating: '미평가' }, true) : '';
+      const sample = k === '평가' ? `<i class="dot" style="background:${RATING_COLOR[o]}"></i>`
+        : k === '시세' ? `<i class="dot" style="background:${PRICE_COLOR[o]}"></i>`
+        : k === '유형' ? pinMarkup({ type: o, color: '#5f6b7a', mini: true }) : '';
       return `<button class="chip${filters[k].has(o) ? ' on' : ''}" data-k="${esc(k)}" data-v="${esc(o)}">${sample}${esc(o)} <span class="n">${cnt}</span></button>`;
     }).join('')}</div></div>`).join('');
 }
@@ -455,6 +471,14 @@ $('#filter-groups').onclick = e => {
   s.has(c.dataset.v) ? s.delete(c.dataset.v) : s.add(c.dataset.v);
   saveFilters(); refresh();
 };
+function syncColorBy() {
+  for (const b of $('#color-by').querySelectorAll('button')) b.classList.toggle('on', b.dataset.v === colorBy);
+}
+$('#color-by').onclick = e => {
+  const b = e.target.closest('button'); if (!b || b.dataset.v === colorBy) return;
+  colorBy = b.dataset.v; store.set('colorBy', colorBy); syncColorBy(); refresh();
+};
+syncColorBy();
 $('#filter-reset').onclick = () => { Object.values(filters).forEach(s => s.clear()); saveFilters(); refresh(); };
 
 function drawList() {
@@ -646,6 +670,7 @@ async function setZones(on) {
   zonesOn = on;
   store.set('zonesOn', on);
   $('#btn-zones').classList.toggle('on', on);
+  syncLegend();
   if (on) {
     try { await loadZones(); } catch { return; }
   } else closePopup();
@@ -656,12 +681,26 @@ async function setZones(on) {
 }
 $('#btn-zones').onclick = () => setZones(!zonesOn);
 
+// ---------- 아래쪽 범례 (구역·용도 레이어를 켰을 때) ----------
+// 카카오 지적편집도 화면에서 뽑은 색. 1·2·3종 같은 세부는 지도 위 글자로 나옴
+const DISTRICT_LEGEND = [['#f2ef92', '주거 (지도에 1·2·3종 표시)'], ['#f6a6ae', '상업'], ['#b7c4f0', '공업·준공업'], ['#acdb81', '녹지']];
+const ZONE_LEGEND = [['#d93025', '재정비촉진지구', true], ['#e8710a', '재개발'], ['#9334e6', '재건축'], ['#0e9aa7', '가로주택·소규모'],
+  ['#1e8e3e', '주거환경'], ['#80868b', '존치']];
+function syncLegend() {
+  const row = (title, items) => `<div class="lg-row"><b>${title}</b>${items.map(([c, t, dash]) =>
+    `<span><i style="${dash ? `border:2px dashed ${c}` : `background:${c}`}"></i>${t}</span>`).join('')}</div>`;
+  const html = (zonesOn ? row('구역', ZONE_LEGEND) : '') + (districtOn ? row('용도', DISTRICT_LEGEND) : '');
+  $('#legendbar').innerHTML = html;
+  $('#legendbar').hidden = !html;
+}
+
 // ---------- 용도지역 (카카오 지적편집도 오버레이) ----------
 let districtOn = store.get('districtOn', false);
 function setDistrict(on) {
   districtOn = on;
   store.set('districtOn', on);
   $('#btn-district').classList.toggle('on', on);
+  syncLegend();
   if (!map) return;
   if (on) map.addOverlayMapTypeId(K.MapTypeId.USE_DISTRICT);
   else map.removeOverlayMapTypeId(K.MapTypeId.USE_DISTRICT);
@@ -798,6 +837,7 @@ function showNote(name, doFocus = true) {
     n.ll && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/to/${q},${n.ll[0]},${n.ll[1]}">대중교통·차 (카카오맵)</a>`,
     n.isPlace && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/search/${encodeURIComponent(f.주소 ? String(f.주소).replace(/\s*\(.*\)$/, '') : n.name)}">카카오맵 검색</a>`,
     n.isPlace && `<a class="btn" target="_blank" rel="noopener" href="https://m.land.naver.com/search/result/${q}">네이버부동산</a>`,
+    n.isPlace && (f.주소 || n.ll) && `<a class="btn" data-act="eum" target="_blank" rel="noopener" href="${EUM_HOME}">토지이음</a>`,
     n.isPlace && `<button class="btn" data-act="pick">${n.ll ? '위치 수정' : '위치 지정'}</button>`,
   ].filter(Boolean);
   $('#sheet-body').innerHTML = `
@@ -816,7 +856,44 @@ function showNote(name, doFocus = true) {
   $('#sheet-body').querySelectorAll('.md a[href^="http"]').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
   $('#sheet').hidden = false;
   loadAtts();
+  if (n.isPlace) pnuOf(n).then(pnu => {
+    const a = $('#sheet-body [data-act="eum"]');
+    if (a && pnu && currentNote() === n) { a.href = EUM_LAND(pnu); a.title = `토지이용계획 (PNU ${pnu})`; }
+  });
   if (n.ll && doFocus) focus(n.ll);
+}
+
+// ---------- 토지이음: 노트 주소(없으면 좌표)의 지번 → PNU 19자리 → 그 필지의 토지이용계획 화면 ----------
+// PNU = 법정동코드 10 + 산(1 일반, 2 산) + 본번 4 + 부번 4. 못 만들면 토지이음 첫 화면.
+const EUM_HOME = 'https://www.eum.go.kr/web/am/amMain.jsp';
+const EUM_LAND = pnu => `https://www.eum.go.kr/web/ar/lu/luLandDet.jsp?isNoScr=script&mode=search&pnu=${pnu}`;
+const makePnu = (bcode, mountain, main, sub) => (/^\d{10}$/.test(bcode || '') && +main > 0
+  ? `${bcode}${mountain === 'Y' ? 2 : 1}${String(+main).padStart(4, '0')}${String(+sub || 0).padStart(4, '0')}` : null);
+const pnuCache = new Map();
+async function pnuOf(n) {
+  const key = `${n.path}|${n.fm.주소 || ''}|${n.ll || ''}`;
+  if (pnuCache.has(key)) return pnuCache.get(key);
+  const svc = window.kakao?.maps?.services;
+  if (!svc) return null;
+  const geo = new svc.Geocoder();
+  const call = (fn, ...args) => new Promise(r => fn.call(geo, ...args, (res, st) => r(st === svc.Status.OK ? res : [])));
+  let pnu = null;
+  // 주소: 괄호 안 지번·'일대' 같은 꼬리를 떼고 검색. "(자양동 516)"처럼 괄호에 지번만 있으면 그것도 시도
+  const raw = String(n.fm.주소 || '');
+  const tries = [raw.replace(/\(.*?\)/g, '').replace(/\s*(일대|일원)\s*$/, '').trim()];
+  const inParen = raw.match(/\(([^)]*\d[^)]*)\)/)?.[1];
+  if (inParen) tries.push(`${raw.split(/\s+/)[0]} ${inParen.replace(/\s*(일대|일원).*$/, '')}`);
+  for (const q of tries.filter(Boolean)) {
+    const j = (await call(geo.addressSearch, q))[0]?.address;
+    if (j && (pnu = makePnu(j.b_code, j.mountain_yn, j.main_address_no, j.sub_address_no))) break;
+  }
+  if (!pnu && n.ll) {
+    const j = (await call(geo.coord2Address, n.ll[1], n.ll[0]))[0]?.address;
+    const b = (await call(geo.coord2RegionCode, n.ll[1], n.ll[0])).find(r => r.region_type === 'B');
+    if (j && b) pnu = makePnu(b.code, j.mountain_yn, j.main_address_no, j.sub_address_no);
+  }
+  pnuCache.set(key, pnu);
+  return pnu;
 }
 
 // ---------- 사진 ----------
