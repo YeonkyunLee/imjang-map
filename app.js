@@ -591,10 +591,20 @@ let zonesOn = store.get('zonesOn', false);
 const ZONE_LEVEL = 7;
 const zoneShown = new Set();
 const zonePath = f => f.geometry.coordinates.map(ring => ring.map(([x, y]) => new K.LatLng(y, x)));
+// 진행 단계(s, 정비사업 정보몽땅): 진행 중 / 완료(준공·이전고시·해산·청산) / 기록 없음(오래전 완료됐거나 사업 전).
+// 촉진지구·존치는 지구 경계라 단계 없이 항상 표시. 완료·기록 없음은 기본 숨김, 켜면 흐린 회색.
+const ZONE_DONE = /준공|이전고시|해산|청산/;
+const zoneState = f => (f.properties.k === '촉진지구' || f.properties.k === '존치' ? 'district'
+  : !f.properties.s ? 'none' : ZONE_DONE.test(f.properties.s) ? 'done' : 'active');
+let zonesAll = store.get('zonesAll', false);
+const zoneVisible = f => zonesAll || zoneState(f) === 'active' || zoneState(f) === 'district';
 function zonePoly(f) {
   if (f.poly) return f.poly;
   const big = f.properties.k === '촉진지구';
-  f.poly = new K.Polygon({
+  const dim = zoneState(f) === 'done' || zoneState(f) === 'none';
+  f.poly = new K.Polygon(dim ? {
+    path: zonePath(f), strokeColor: '#80868b', strokeWeight: 1, strokeOpacity: 0.7, strokeStyle: 'shortdash', fillColor: '#80868b', fillOpacity: 0.05,
+  } : {
     path: zonePath(f), strokeColor: ZONE_COLOR[f.properties.k], strokeWeight: big ? 2 : 1.5, strokeOpacity: 0.9,
     strokeStyle: big ? 'dash' : 'solid', fillColor: ZONE_COLOR[f.properties.k], fillOpacity: big ? 0.03 : 0.14,
   });
@@ -609,7 +619,7 @@ function drawZones() {
     const b = map.getBounds(), sw = b.getSouthWest(), ne = b.getNorthEast();
     for (const f of zones) {
       const [x0, y0, x1, y1] = f.bb;
-      if (x1 >= sw.getLng() && x0 <= ne.getLng() && y1 >= sw.getLat() && y0 <= ne.getLat()) want.add(f);
+      if (zoneVisible(f) && x1 >= sw.getLng() && x0 <= ne.getLng() && y1 >= sw.getLat() && y0 <= ne.getLat()) want.add(f);
     }
   } else if (zonesOn && !zoneHintShown) {
     zoneHintShown = true;
@@ -654,13 +664,14 @@ function inZone(f, [lat, lng]) {
   return inside;
 }
 const zonesAt = ll => (zones || []).filter(f => inZone(f, ll));
-const zoneLabel = f => `${f.properties.n || '(이름 없음)'} · ${ZONE_CODE[f.properties.c] || f.properties.k}`;
+const zoneStage = f => ({ active: f.properties.s, done: `${f.properties.s} (완료)`, none: '진행 기록 없음', district: '' }[zoneState(f)]);
+const zoneLabel = f => [f.properties.n || '(이름 없음)', ZONE_CODE[f.properties.c] || f.properties.k, zoneStage(f)].filter(Boolean).join(' · ');
 
 let popup = null;
 function closePopup() { popup?.setMap(null); popup = null; }
 function zonePopup(ll) {
   closePopup();
-  const hit = zonesAt(ll);
+  const hit = zonesAt(ll).filter(zoneVisible);
   if (!hit.length) return;
   popup = overlay(ll, `<div class="zpop">${hit.map(f => `<div class="zp"><i style="background:${ZONE_COLOR[f.properties.k]}"></i>${esc(zoneLabel(f))}</div>`).join('')}</div>`,
     { y: 1, z: 10, clickable: true });
@@ -689,10 +700,20 @@ const ZONE_LEGEND = [['#d93025', '재정비촉진지구', true], ['#e8710a', '�
 function syncLegend() {
   const row = (title, items) => `<div class="lg-row"><b>${title}</b>${items.map(([c, t, dash]) =>
     `<span><i style="${dash ? `border:2px dashed ${c}` : `background:${c}`}"></i>${t}</span>`).join('')}</div>`;
-  const html = (zonesOn ? row('구역', ZONE_LEGEND) : '') + (districtOn ? row('용도', DISTRICT_LEGEND) : '');
+  const all = `<button class="lg-btn${zonesAll ? ' on' : ''}" id="zones-all">${zonesAll ? '✓ ' : ''}완료·기록 없는 구역도 보기</button>`;
+  const html = (zonesOn ? row('구역', zonesAll ? [...ZONE_LEGEND, ['#80868b', '완료·기록 없음(회색 점선)', true]] : ZONE_LEGEND).replace(/<\/div>$/, `${all}</div>`) : '')
+    + (districtOn ? row('용도', DISTRICT_LEGEND) : '');
   $('#legendbar').innerHTML = html;
   $('#legendbar').hidden = !html;
 }
+$('#legendbar').onclick = e => {
+  if (e.target.id !== 'zones-all') return;
+  zonesAll = !zonesAll;
+  store.set('zonesAll', zonesAll);
+  closePopup();
+  syncLegend();
+  drawZones();
+};
 
 // ---------- 용도지역 (카카오 지적편집도 오버레이) ----------
 let districtOn = store.get('districtOn', false);
