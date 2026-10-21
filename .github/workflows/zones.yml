@@ -1,0 +1,39 @@
+name: 정비구역 단계 갱신
+
+# 매일 아침 정비사업 정보몽땅의 진행 단계를 받아 zones.json에 반영. 바뀐 게 있을 때만 커밋하고 Pages를 다시 빌드한다.
+on:
+  schedule:
+    - cron: '30 21 * * *' # 매일 06:30 KST
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency: zones
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 단계 갱신
+        env:
+          BROWSER: google-chrome
+        run: node tools/zone_status.cjs
+      - name: 바뀌었으면 커밋하고 Pages 빌드
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- zones.json tools/geocache.json; then echo "변경 없음"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add zones.json tools/geocache.json
+          git commit -m "정비구역 단계 자동 갱신 $(TZ=Asia/Seoul date +%F)"
+          git pull --rebase
+          git push
+          gh api -X POST "repos/${{ github.repository }}/pages/builds" || echo "Pages 빌드 요청 실패 (다음 푸시 때 반영)"

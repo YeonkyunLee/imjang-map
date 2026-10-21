@@ -1,6 +1,7 @@
 // 정비사업 정보몽땅 사업장 목록(진행단계·대표지번) → 지오코딩 → zones.json 각 구역에 단계(s)·사업장명(p) 붙이기
 //
-//   node tools/zone_status.cjs            (Edge 필요, 카카오 JS 키는 index.html 기본값 사용)
+//   node tools/zone_status.cjs            (Edge 또는 BROWSER=크롬 경로, 카카오 JS 키는 index.html 기본값 사용)
+//   GitHub Actions(.github/workflows/zones.yml)가 매일 돌려서 바뀐 게 있으면 커밋한다.
 //
 // 카카오 JS 키는 등록 도메인에서만 동작하므로, 헤드리스 Edge로 배포 사이트(github.io)를 열고 그 안에서 지오코딩한다.
 // 사업장 대표지번이 구역 안에 있으면 그 구역의 단계로 본다. 여러 개면 구역 이름과 번호가 맞는 것, 다음으로 진행 중인 것.
@@ -11,7 +12,8 @@ const ROOT = path.resolve(__dirname, '..');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const LIST = 'https://cleanup.seoul.go.kr/cleanup/bsnssttus/lscrMainIndx.do?cpage=1&pageSize=3000';
 const SITE = 'https://yeonkyunlee.github.io/imjang-map/manifest.webmanifest';
-const EDGE = 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+const BROWSER = process.env.BROWSER || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+const CACHE = path.join(__dirname, 'geocache.json'); // 대표지번 → 좌표 (찾은 것만 저장, 못 찾은 건 매번 다시 시도)
 
 const unesc = s => s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ');
 function parseList(html) {
@@ -40,8 +42,14 @@ const num = s => (String(s).replace(/\s/g, '').match(/[가-힣]+(\d+(?:-\d+)?)/)
   const key = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').match(/var key = '([0-9a-f]{32})'/)[1];
   const rows = parseList(await (await fetch(LIST)).text());
   console.log('사업장', rows.length);
+  if (rows.length < 500) throw new Error('사업장 목록이 비정상적으로 적음 — 사이트 점검 중일 수 있어 중단');
+  const cache = fs.existsSync(CACHE) ? JSON.parse(fs.readFileSync(CACHE, 'utf8')) : {};
+  const qOf = r => `서울 ${r.gu} ${r.jibun}`;
+  const todo = [...new Set(rows.map(qOf).filter(q => !cache[q]))];
+  console.log('지오코딩 필요', todo.length);
 
-  const edge = spawn(EDGE, ['--headless=new', '--disable-gpu', '--remote-debugging-port=9346',
+  if (todo.length) {
+  const edge = spawn(BROWSER, ['--headless=new', '--disable-gpu', '--no-sandbox', '--remote-debugging-port=9346',
     `--user-data-dir=${path.join(require('os').tmpdir(), 'zone-status-' + Date.now())}`, 'about:blank'], { stdio: 'ignore' });
   let ws;
   try {
@@ -63,20 +71,24 @@ const num = s => (String(s).replace(/\s/g, '').match(/[가-힣]+(\d+(?:-\d+)?)/)
     if (ok !== 'ok') throw new Error(ok);
     const pts = await ev(`(async () => {
       const svc = kakao.maps.services, geo = new svc.Geocoder();
-      const rows = ${JSON.stringify(rows.map(r => `서울 ${r.gu} ${r.jibun}`))};
+      const rows = ${JSON.stringify(todo)};
       const out = [];
       const one = q => new Promise(r => geo.addressSearch(q, (res, st) => r(st === svc.Status.OK ? [+res[0].y, +res[0].x] : null)));
       // 대표지번이 본번만이고 실제로는 부번 필지만 있으면(예: 808 → 808-1) 못 찾으므로 -1, -2도 시도
       for (const q of rows) out.push(await one(q) || (/-/.test(q) ? null : (await one(q + '-1')) || (await one(q + '-2'))));
       return out;
     })()`);
-    rows.forEach((r, i) => (r.ll = pts[i]));
+    todo.forEach((q, i) => { if (pts[i]) cache[q] = pts[i]; });
   } finally { ws?.close(); edge.kill(); }
+  fs.writeFileSync(CACHE, JSON.stringify(cache, null, 0));
+  }
+  rows.forEach(r => (r.ll = cache[qOf(r)] || null));
   console.log('지오코딩 성공', rows.filter(r => r.ll).length);
   if (process.env.ZS_DUMP) fs.writeFileSync(process.env.ZS_DUMP, JSON.stringify(rows));
 
   const zf = path.join(ROOT, 'zones.json');
   const z = JSON.parse(fs.readFileSync(zf, 'utf8'));
+  const before = JSON.stringify(z.features.map(f => [f.properties.s, f.properties.p]));
   let tagged = 0, byName = 0;
   // 구역 종류와 사업 구분이 맞는 것만 (재개발 구역 안의 가로주택 사업이 구역 단계를 정하지 않게)
   const compat = (k, kind) => k === '재건축' ? /재건축/.test(kind) && !/소규모/.test(kind)
@@ -114,6 +126,7 @@ const num = s => (String(s).replace(/\s/g, '').match(/[가-힣]+(\d+(?:-\d+)?)/)
     f.properties.p = pick.name;
     byName++;
   }
+  if (JSON.stringify(z.features.map(f => [f.properties.s, f.properties.p])) === before) { console.log('변경 없음'); return; }
   z.status = `정비사업 정보몽땅 ${new Date().toLocaleDateString('sv-SE')}`;
   fs.writeFileSync(zf, JSON.stringify(z));
   console.log('단계 붙은 구역: 위치', tagged, '+ 이름', byName, '/ 완료', z.features.filter(f => DONE.test(f.properties.s || '')).length);
