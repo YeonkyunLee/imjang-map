@@ -493,10 +493,10 @@ function drawList() {
     return `<div class="region"><h3>${esc(r)} <span class="n">${items.length}</span>
       ${routes[r]?.length ? `<button class="btn sm" data-route="${esc(r)}">동선 ${routes[r].length}곳</button>` : ''}</h3>
       ${mocs.length ? `<div class="mocs">${mocs.map(m => `<a href="#" data-note="${esc(m.name)}">${esc(m.name)}</a>`).join('')}</div>` : ''}
-      ${items.map(n => `<button class="item" data-note="${esc(n.name)}">${pinHtml(n, true)}
-        <span class="name">${esc(n.name)}<br><span class="sub">${esc([n.fm.유형, n.fm.상태, n.fm.시세 && `${n.fm.시세}억`].filter(Boolean).join(' · '))}</span></span>
-        ${queue.some(o => o.path === n.path) ? '<span class="tag">대기</span>' : ''}
-        ${n.ll ? '' : '<span class="tag warn">좌표 없음</span>'}</button>`).join('')}</div>`;
+      ${items.map(n => `<button class="item" data-note="${esc(n.name)}"><span class="item-ic">${pinHtml(n)}</span>
+        <span class="name">${esc(n.name)}<span class="sub">${esc([n.fm.유형, n.fm.상태, n.rating !== '미평가' && n.rating].filter(Boolean).join(' · '))}</span>
+          ${queue.some(o => o.path === n.path) ? '<span class="tag">대기</span>' : ''}${n.ll ? '' : '<span class="tag warn">좌표 없음</span>'}</span>
+        <span class="item-price"${n.fm.시세 ? ` style="--c:${PRICE_COLOR[priceBand(n.fm.시세)]}"` : ''}>${n.fm.시세 ? `${esc(n.fm.시세)}<small>억</small>` : '<small>—</small>'}</span></button>`).join('')}</div>`;
   }).join('') || '<p class="hint">조건에 맞는 장소가 없습니다.</p>';
 }
 $('#search').oninput = drawList;
@@ -839,48 +839,103 @@ function renderMd(body, selfName) {
   return DOMPurify.sanitize(marked.parse(text, { gfm: true, breaks: false }), { ADD_ATTR: ['data-note', 'target'] });
 }
 
+const STATUS_COLOR = { 계획: '#2563eb', 다녀옴: '#188038', 제외: '#80868b' };
 function editHtml(n) {
-  const seg = (k, opts, cur) => `<div class="seg" data-field="${k}"><span class="k">${k}</span>${opts.map(o =>
-    `<button data-v="${esc(o)}" class="${o === cur || (o === '없음' && !cur) ? 'on' : ''}">${esc(o)}</button>`).join('')}</div>`;
-  return `<div class="edit">
-    ${seg('상태', FILTERS.상태, n.fm.상태)}
-    ${seg('평가', ['1순위', '추천', '후보', '탈락', '없음'], n.fm.평가)}
-    <div class="memo"><textarea rows="2" placeholder="현장 메모 (시각과 함께 임장 메모에 추가)"></textarea>
+  const seg = (k, opts, cur, colors) => `<div class="seg" data-field="${k}"><span class="k">${k}</span><div class="opts">${opts.map(o => {
+    const on = o === cur || (o === '없음' && !cur);
+    return `<button data-v="${esc(o)}" class="${on ? 'on' : ''}"${on && colors?.[o] ? ` style="--on:${colors[o]}"` : ''}>${esc(o)}</button>`;
+  }).join('')}</div></div>`;
+  return `<div class="edit card">
+    ${seg('상태', FILTERS.상태, n.fm.상태, STATUS_COLOR)}
+    ${seg('평가', ['1순위', '추천', '후보', '탈락', '없음'], n.fm.평가, RATING_COLOR)}
+    <div class="memo"><textarea rows="2" placeholder="현장 메모 — 시각과 함께 임장 메모에 추가"></textarea>
       <div class="col"><button class="btn primary" data-act="memo">저장</button>
         <label class="btn" title="사진 첨부 (메모를 적으면 설명으로 함께 저장)">📷<input type="file" accept="image/*" multiple hidden id="photo-input"></label></div></div>
   </div>`;
+}
+
+// 정비사업 단계 → 7단계 막대
+const STAGE_STEPS = ['구역지정', '추진위', '조합설립', '사업시행', '관리처분', '착공', '준공'];
+function stageStep(s) {
+  const rules = [[/준공|이전고시|해산|청산/, 6], [/착공|철거|이주|분양/, 5], [/관리처분/, 4], [/사업시행|사업계획승인/, 3],
+    [/조합설립|창립|조합규약|조합원 모집/, 2], [/추진위/, 1], [/정비구역|정비계획|안전진단|도시계획|건축심의/, 0]];
+  return rules.find(([re]) => re.test(s || ''))?.[1] ?? -1;
+}
+function stageHtml(z) {
+  const i = stageStep(z.properties.s);
+  return `<div class="stage card"><div class="stage-top"><span class="k">사업 단계</span><b>${esc(z.properties.s)}</b></div>
+    ${i >= 0 ? `<div class="steps">${STAGE_STEPS.map((t, k) => `<div class="st${k < i ? ' done' : k === i ? ' cur' : ''}"><i></i><span>${t}</span></div>`).join('')}</div>` : ''}
+    <div class="sub">${esc(z.properties.p || z.properties.n)}</div></div>`;
+}
+
+// 노트 본문을 ## 단위 카드로. '출처'·'참고'는 접어 둠
+function sectionize(md) {
+  const kids = [...md.childNodes];
+  md.textContent = '';
+  let box = Object.assign(document.createElement('div'), { className: 'sec intro' });
+  md.append(box);
+  for (const el of kids) {
+    if (el.nodeName === 'H2') {
+      const title = el.textContent.trim();
+      box = Object.assign(document.createElement('details'), { className: `sec${/임장 메모/.test(title) ? ' memo-sec' : ''}`, open: !/출처|참고|링크/.test(title) });
+      box.append(Object.assign(document.createElement('summary'), { textContent: title }));
+      md.append(box);
+    } else box.append(el);
+  }
+  for (const s of md.querySelectorAll('.sec')) if (!s.textContent.replace(s.querySelector('summary')?.textContent || '', '').trim() && !s.querySelector('img')) s.remove();
 }
 
 function showNote(name, doFocus = true) {
   const n = byName.get(name);
   if (!n) { if (notes.length) setStatus(`노트 없음: ${name}`, true); return; }
   const f = n.fm;
-  const facts = [f.준공 && `${f.준공}년`, f.세대 && `${Number(f.세대).toLocaleString()}세대`, f.시세 && `${f.시세평형 || ''} ${f.시세}억`.trim(),
-    f.방문일 && `방문 ${f.방문일 instanceof Date ? f.방문일.toISOString().slice(0, 10) : f.방문일}`].filter(Boolean);
-  const badges = n.isPlace ? [f.유형, f.상태, n.rating].filter(Boolean) : ['노트'];
+  const day = v => (v instanceof Date ? v.toISOString().slice(0, 10) : v ? String(v) : '');
   const q = encodeURIComponent(n.name);
   const inZones = n.ll ? zonesAt(n.ll) : [];
+  const stageZone = inZones.find(z => z.properties.s && zoneState(z) === 'active') || inZones.find(z => z.properties.s);
+  // 본문 첫 줄 '# 이름 (별칭)'은 제목으로 올리고 본문에서는 뺀다
+  let body = n.body, alias = '';
+  const h1 = body.match(/^\s*#\s+(.+?)\s*\r?\n/);
+  if (h1 && h1[1].startsWith(n.name)) { alias = h1[1].slice(n.name.length).trim().replace(/^\((.*)\)$/, '$1'); body = body.slice(h1[0].length); }
+  const tile = (ic, label, attrs) => `<${attrs.href ? 'a' : 'button'} class="tile" ${Object.entries(attrs).map(([k, v]) => `${k}="${esc(v)}"`).join(' ')}><span class="ic">${ic}</span><span>${label}</span></${attrs.href ? 'a' : 'button'}>`;
+  const ext = href => ({ href, target: '_blank', rel: 'noopener' });
   const acts = [
-    n.ll && `<button class="btn" data-act="focus">지도에서 보기</button>`,
-    n.ll && `<button class="btn" data-act="walk">도보 길찾기</button>`,
-    n.ll && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/to/${q},${n.ll[0]},${n.ll[1]}">대중교통·차 (카카오맵)</a>`,
-    n.isPlace && `<a class="btn" target="_blank" rel="noopener" href="https://map.kakao.com/link/search/${encodeURIComponent(f.주소 ? String(f.주소).replace(/\s*\(.*\)$/, '') : n.name)}">카카오맵 검색</a>`,
-    n.isPlace && `<a class="btn" target="_blank" rel="noopener" href="https://m.land.naver.com/search/result/${q}">네이버부동산</a>`,
-    n.isPlace && (f.주소 || n.ll) && `<a class="btn" data-act="eum" target="_blank" rel="noopener" href="${EUM_HOME}">토지이음</a>`,
-    n.isPlace && `<button class="btn" data-act="pick">${n.ll ? '위치 수정' : '위치 지정'}</button>`,
+    n.ll && tile('🚶', '도보 길찾기', { 'data-act': 'walk' }),
+    n.ll && tile('🚇', '대중교통·차', ext(`https://map.kakao.com/link/to/${q},${n.ll[0]},${n.ll[1]}`)),
+    n.ll && tile('🎯', '지도에서', { 'data-act': 'focus' }),
+    n.isPlace && tile('🗺️', '카카오맵', ext(`https://map.kakao.com/link/search/${encodeURIComponent(f.주소 ? String(f.주소).replace(/\s*\(.*\)$/, '') : n.name)}`)),
+    n.isPlace && tile('🏠', '네이버부동산', ext(`https://m.land.naver.com/search/result/${q}`)),
+    n.isPlace && (f.주소 || n.ll) && tile('📜', '토지이음', { ...ext(EUM_HOME), 'data-act': 'eum' }),
+    n.isPlace && tile('📌', n.ll ? '위치 수정' : '위치 지정', { 'data-act': 'pick' }),
   ].filter(Boolean);
+  const band = priceBand(f.시세);
+  const stat = (k, v) => `<div class="stat"><span class="k">${k}</span><b>${v ? esc(v) : '—'}</b></div>`;
   $('#sheet-body').innerHTML = `
-    <h2>${esc(n.name)}</h2>
-    <div class="badges">${badges.map(b => `<span class="tag">${esc(b)}</span>`).join('')}
-      <span class="tag">${esc(n.region)}</span>${n.isPlace && !n.ll ? '<span class="tag warn">좌표 없음</span>' : ''}
-      ${n.error ? `<span class="tag warn">frontmatter 오류</span>` : ''}</div>
-    ${facts.length ? `<div class="facts">${esc(facts.join(' · '))}</div>` : ''}
-    ${f.주소 ? `<div class="addr">${esc(f.주소)}</div>` : ''}
+    <div class="hero">
+      ${n.isPlace ? `<div class="hero-icon">${pinMarkup({ type: f.유형, color: pinColor(n) })}</div>` : ''}
+      <div class="hero-text">
+        <h2>${esc(n.name)}</h2>
+        <div class="hero-sub">${esc([alias, n.isPlace ? f.유형 : '노트', n.region].filter(Boolean).join(' · '))}</div>
+      </div>
+    </div>
+    ${n.isPlace ? `<div class="pills">
+      ${f.상태 ? `<span class="pill" style="--c:${STATUS_COLOR[f.상태] || '#80868b'}">${f.상태 === '다녀옴' ? '✓ ' : ''}${esc(f.상태)}</span>` : ''}
+      <span class="pill" style="--c:${RATING_COLOR[n.rating] || RATING_COLOR.미평가}">${n.rating === '1순위' ? '★ ' : ''}${esc(n.rating)}</span>
+      ${!n.ll ? '<span class="pill warn">좌표 없음</span>' : ''}${queue.some(o => o.path === n.path) ? '<span class="pill warn">저장 대기</span>' : ''}
+      ${n.error ? '<span class="pill warn">frontmatter 오류</span>' : ''}</div>` : ''}
+    ${n.isPlace ? `<div class="price card">
+      <div class="price-main">${f.시세 ? `<b>${esc(f.시세)}</b><span class="unit">억</span>${f.시세평형 ? `<span class="py">${esc(f.시세평형)}</span>` : ''}` : '<span class="none">시세 정보 없음</span>'}
+        <span class="band" style="--c:${PRICE_COLOR[band]}">${band}</span></div>
+      <div class="stats">${stat('세대', f.세대 && `${Number(f.세대).toLocaleString()}세대`)}${stat('준공', f.준공 && `${f.준공}년`)}${stat(f.방문일 ? '방문' : '조사', day(f.방문일) || day(f.조사일))}</div>
+    </div>` : ''}
+    ${stageZone ? stageHtml(stageZone) : ''}
+    ${f.주소 ? `<div class="addr card"><span class="ic">📍</span><span class="t">${esc(f.주소)}</span><button class="copy" data-act="copy-addr" title="주소 복사">복사</button></div>` : ''}
     ${inZones.length ? `<div class="zones-in">${inZones.map(z => `<div class="zp"><i style="background:${ZONE_COLOR[z.properties.k]}"></i>${esc(zoneLabel(z))}</div>`).join('')}</div>` : ''}
-    ${acts.length ? `<div class="actions">${acts.join('')}</div>` : ''}
+    ${acts.length ? `<div class="tiles">${acts.join('')}</div>` : ''}
     ${n.isPlace && !n.ll ? `<div class="cands"><button class="btn" data-act="cands">위치 후보 찾기</button></div>` : ''}
     ${n.isPlace ? editHtml(n) : ''}
-    <div class="md">${renderMd(n.body, n.name)}</div>`;
+    <div class="md">${renderMd(body, n.name)}</div>`;
+  sectionize($('#sheet-body .md'));
   if (doFocus) $('#sheet-body').scrollTop = 0;
   $('#sheet-body').querySelectorAll('.md a[href^="http"]').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
   $('#sheet').hidden = false;
@@ -1014,6 +1069,9 @@ $('#sheet-body').onclick = async e => {
   if (act === 'focus' && n.ll) focus(n.ll);
   if (act === 'pick') startPick(n);
   if (act === 'walk') walkTo(n);
+  if (act === 'copy-addr') {
+    try { await navigator.clipboard.writeText(String(n.fm.주소)); setStatus('주소 복사됨'); } catch { setStatus('복사 실패 — 주소를 길게 눌러 복사하세요', true); }
+  }
   if (act === 'cands') findCandidates(n);
   if (act === 'cand-show') showCandidate(cands[e.target.dataset.i]);
   if (act === 'cand-use') {
@@ -1029,7 +1087,7 @@ $('#sheet-body').onclick = async e => {
   }
   const segBtn = e.target.closest('.seg button');
   if (segBtn) {
-    const k = segBtn.parentElement.dataset.field;
+    const k = segBtn.closest('.seg').dataset.field;
     const v = segBtn.dataset.v === '없음' ? '' : segBtn.dataset.v;
     if ((n.fm[k] || '') === v) return;
     const fields = { [k]: v };
