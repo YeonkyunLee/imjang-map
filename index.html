@@ -9,8 +9,34 @@
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="style.css">
+<style>
+/* 시작 화면: 외부 CSS·JS보다 먼저 보이도록 여기에 둔다 */
+#splash { position: fixed; inset: 0; z-index: 5000; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: #1f2937; color: #fff; font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; transition: opacity .45s ease; }
+#splash.out { opacity: 0; pointer-events: none; }
+#splash img { width: 104px; height: 104px; border-radius: 24px; box-shadow: 0 8px 28px rgba(0, 0, 0, .35); animation: sp-pop .6s cubic-bezier(.2, 1.4, .4, 1) both; }
+#splash h1 { margin: 6px 0 0; font-size: 28px; font-weight: 800; letter-spacing: -.5px; animation: sp-up .5s .15s ease both; }
+#splash p { margin: 0; font-size: 14px; color: #cbd5e1; animation: sp-up .5s .25s ease both; }
+#splash .dots { position: absolute; bottom: calc(56px + env(safe-area-inset-bottom)); display: flex; gap: 7px; }
+#splash .dots i { width: 7px; height: 7px; border-radius: 50%; background: #f29900; animation: sp-dot 1s infinite ease-in-out; }
+#splash .dots i:nth-child(2) { animation-delay: .15s; } #splash .dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes sp-pop { from { transform: scale(.6); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes sp-up { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes sp-dot { 0%, 80%, 100% { opacity: .25; transform: scale(.8); } 40% { opacity: 1; transform: none; } }
+</style>
 </head>
 <body>
+<div id="splash" aria-hidden="true">
+  <img src="icon-512.png" alt="">
+  <h1>임장 지도</h1>
+  <p>발로 뛴 기록을 지도 위에</p>
+  <div class="dots"><i></i><i></i><i></i></div>
+</div>
+<script>
+  // 앱 스크립트가 못 뜨는 경우에도 시작 화면에 갇히지 않게
+  window.__splashAt = Date.now();
+  setTimeout(function () { var s = document.getElementById('splash'); if (s) s.classList.add('out'); }, 8000);
+</script>
 <div id="map"></div>
 
 <header id="topbar">

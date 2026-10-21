@@ -1373,7 +1373,15 @@ function setStatus(msg, isError) {
 function refresh() { drawFilters(); drawMarkers(); drawList(); }
 
 let loadInfo = '';
+// 시작 화면(index.html #splash): 노트를 처음 그렸을 때(또는 불러오기가 끝나거나 실패했을 때) 사라짐. 너무 깜빡이지 않게 최소 1초
+function hideSplash() {
+  const s = $('#splash');
+  if (!s || s.classList.contains('out')) return;
+  setTimeout(() => { s.classList.add('out'); setTimeout(() => s.remove(), 500); }, Math.max(0, 1000 - (Date.now() - (window.__splashAt || 0))));
+}
+
 function render(info, doRoute = true) {
+  hideSplash();
   if (info) loadInfo = info;
   notes = Object.entries(displayData()).map(([p, v]) => parseNote(p, v.text));
   byName.clear();
@@ -1428,6 +1436,8 @@ async function load() {
   } catch (err) {
     setStatus(err.message + (Object.keys(cached).length ? ' — 캐시 표시 중' : ''), true);
     if (!cfg.token && cfg.source === 'github') togglePanel('settings', true);
+  } finally {
+    hideSplash();
   }
 }
 
