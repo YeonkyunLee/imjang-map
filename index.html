@@ -104,7 +104,10 @@
 </section>
 
 <section id="panel-new" class="panel" hidden>
-  <h3>새 장소</h3>
+  <h3>임장할 곳 추가</h3>
+  <div class="row new-search"><input id="new-q" type="search" autocomplete="off" placeholder="단지명·구역명·주소 검색"><button type="button" id="new-search" class="btn">검색</button></div>
+  <div id="new-results"></div>
+  <div class="row"><button type="button" id="new-mappick" class="btn">지도에서 찍기</button><button type="button" id="new-here" class="btn">현재 위치</button></div>
   <form id="new-form">
     <label>이름 <input name="name" required autocomplete="off" placeholder="단지명 또는 구역명"></label>
     <label>지역 <input name="region" required list="region-list" autocomplete="off" placeholder="기존 지역 또는 새 지역"></label>
@@ -116,12 +119,13 @@
     <label>첫 메모 <textarea name="memo" rows="2" placeholder="선택"></textarea></label>
     <p class="hint" id="new-ll"></p>
     <div class="row">
-      <button type="submit" class="btn primary">추가</button>
+      <button type="submit" class="btn primary">임장 목록에 추가</button>
       <button type="button" id="new-cancel" class="btn">취소</button>
     </div>
   </form>
 </section>
 
+<button id="btn-add" title="임장할 곳 추가">＋ 추가</button>
 <div id="legendbar" hidden></div>
 <div id="installbar" hidden>
   <span>홈 화면에 설치하면 앱처럼 바로 열려요</span>

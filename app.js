@@ -705,7 +705,15 @@ function syncLegend() {
     + (districtOn ? row('용도', DISTRICT_LEGEND) : '');
   $('#legendbar').innerHTML = html;
   $('#legendbar').hidden = !html;
+  placeAdd();
 }
+// ＋ 버튼은 아래쪽 범례·설치 안내 위에
+function placeAdd() {
+  const lg = $('#legendbar'), ib = $('#installbar');
+  const base = ib.hidden ? 20 : 80;
+  $('#btn-add').style.bottom = `calc(${lg.hidden ? base : base - 8 + lg.offsetHeight + 10}px + env(safe-area-inset-bottom))`;
+}
+window.addEventListener('resize', () => placeAdd());
 $('#legendbar').onclick = e => {
   if (e.target.id !== 'zones-all') return;
   zonesAll = !zonesAll;
@@ -1048,9 +1056,10 @@ function endPick() {
 async function pickAt(ll) {
   const n = picking;
   endPick();
+  if (n.isNew) { setNewLL(ll); togglePanel('new', true); return; } // 새 장소 추가 중 "지도에서 찍기"
   if (await save(n, { type: 'fields', fields: { location: fmtLL(ll) } }, '위치', '위치 저장됨')) showNote(n.name);
 }
-$('#pick-cancel').onclick = endPick;
+$('#pick-cancel').onclick = () => { const p = picking; endPick(); if (p?.isNew) togglePanel('new', true); };
 $('#pick-gps').onclick = () => {
   setStatus('위치 찾는 중…');
   navigator.geolocation.getCurrentPosition(
@@ -1090,19 +1099,101 @@ if (map) {
     if (!e.target.closest('.pin-wrap, .zpop')) longPress(e.clientX, e.clientY);
   });
 }
-function openNew(ll) {
+// 새 장소: ＋ 버튼(검색·지도에서 찍기·현재 위치) 또는 지도 길게 누르기
+function openNew(ll = null) {
   if (picking) return;
-  newLL = ll;
   const f = $('#new-form');
   f.reset();
+  newLL = null;
+  $('#new-q').value = '';
+  $('#new-results').innerHTML = '';
   const cur = currentNote();
   f.elements.region.value = cur?.region || [...filters.지역][0] || '';
   $('#region-list').innerHTML = FILTERS.지역.map(r => `<option value="${esc(r)}">`).join('');
-  $('#new-ll').textContent = `좌표 ${fmtLL(newLL)}`;
   togglePanel('new', true);
-  f.elements.name.focus();
+  if (ll) setNewLL(ll); else { syncNewLL(); $('#new-q').focus(); }
 }
-$('#new-cancel').onclick = () => togglePanel(null);
+let newObjs = [];
+function syncNewLL() {
+  $('#new-ll').textContent = newLL ? `위치 ${fmtLL(newLL)}` : '위치 미지정 — 검색에서 고르거나 "지도에서 찍기"·"현재 위치" (비워 두고 나중에 지정해도 됨)';
+  clear(newObjs);
+  if (newLL && map) newObjs.push(overlay(newLL, '<div class="cand-pin"></div>', { z: 15 }));
+}
+// 위치가 정해지면: 미리보기 핀, 가장 가까운 기존 지역(3km 안), 주소가 비어 있으면 그 자리 주소
+async function setNewLL(ll, { addr } = {}) {
+  newLL = ll;
+  syncNewLL();
+  if (map) { if (map.getLevel() > 4) map.setLevel(4); focusNew(ll); }
+  const f = $('#new-form').elements;
+  const near = FILTERS.지역.map(r => [r, regionCenter(r)]).filter(([, c]) => c).map(([r, c]) => [r, distKm(ll, c)]).sort((a, b) => a[1] - b[1])[0];
+  if (near && near[1] < 3) f.region.value = near[0];
+  if (addr) f.addr.value = addr;
+  else if (!f.addr.value && window.kakao?.maps?.services) {
+    const svc = kakao.maps.services;
+    new svc.Geocoder().coord2Address(ll[1], ll[0], (res, st) => {
+      if (st !== svc.Status.OK || f.addr.value || newLL !== ll) return;
+      const a = res[0];
+      f.addr.value = a.road_address ? `${a.road_address.address_name.replace(/^서울(특별시)?\s*/, '')} (${a.address.address_name.split(' ').slice(-2).join(' ')})`
+        : a.address.address_name.replace(/^서울(특별시)?\s*/, '');
+    });
+  }
+}
+// 패널(왼쪽)·위쪽 바에 가리지 않게 살짝 비켜서 보여줌
+function focusNew(ll) {
+  const wide = window.innerWidth >= 900;
+  const proj = map.getProjection(), p = proj.containerPointFromCoords(LL(ll));
+  map.panTo(proj.coordsFromContainerPoint(new K.Point(p.x - (wide ? 190 : 0), p.y - (wide ? 0 : -mapEl.clientHeight * 0.18))));
+}
+
+// 검색: 카카오 장소(키워드) + 주소. 결과를 고르면 이름·주소·유형·위치를 채운다
+let newHits = [];
+async function searchNew() {
+  const q = $('#new-q').value.trim();
+  const box = $('#new-results');
+  if (!q) return;
+  const svc = window.kakao?.maps?.services;
+  if (!svc) { box.innerHTML = '<p class="hint err">지도(카카오)가 없어 검색할 수 없습니다 — 직접 입력하세요</p>'; return; }
+  box.innerHTML = '<p class="hint">찾는 중…</p>';
+  const call = (fn, self, ...a) => new Promise(r => fn.call(self, ...a, (res, st) => r(st === svc.Status.OK ? res : [])));
+  const places = new svc.Places(), geo = new svc.Geocoder();
+  const [kw, ad] = await Promise.all([call(places.keywordSearch, places, q), call(geo.addressSearch, geo, q)]);
+  const short = s => String(s || '').replace(/^서울(특별시)?\s*/, '');
+  newHits = [
+    ...ad.slice(0, 3).map(a => ({ name: '', addr: short(a.road_address?.address_name ? `${a.road_address.address_name} (${a.address?.address_name.split(' ').slice(-2).join(' ')})` : a.address_name),
+      ll: [+a.y, +a.x], cat: '주소', label: short(a.address_name) })),
+    ...kw.slice(0, 10).map(p => ({ name: p.place_name, addr: short(p.road_address_name ? `${p.road_address_name} (${p.address_name.split(' ').slice(-2).join(' ')})` : p.address_name),
+      ll: [+p.y, +p.x], cat: p.category_name.split(' > ').slice(-1)[0] || '', label: p.place_name, catFull: p.category_name })),
+  ];
+  box.innerHTML = newHits.length ? newHits.map((h, i) => `<button type="button" class="hit" data-i="${i}"><b>${esc(h.label)}</b>
+      <span class="sub">${esc(h.cat)} · ${esc(h.addr)}</span>${byName.has(h.name) ? '<span class="tag">이미 있음</span>' : ''}</button>`).join('')
+    : '<p class="hint">결과 없음 — 이름을 직접 쓰고 "지도에서 찍기"로 위치를 정하세요</p>';
+}
+const guessType = h => /재건축/.test(h.name) ? '재건축' : /구역|재개발|뉴타운|촉진/.test(h.name) ? '재개발구역'
+  : /도시형/.test(h.name + h.catFull) ? '도시형생활주택' : /아파트/.test(h.catFull || '') ? '아파트' : null;
+$('#new-search').onclick = searchNew;
+$('#new-q').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); searchNew(); } };
+$('#new-results').onclick = e => {
+  const b = e.target.closest('.hit'); if (!b) return;
+  const h = newHits[b.dataset.i], f = $('#new-form').elements;
+  if (h.name) f.name.value = h.name.replace(/아파트$/, '').trim() || h.name;
+  const t = guessType(h); if (t) f.type.value = t;
+  f.addr.value = '';
+  setNewLL(h.ll, { addr: h.addr });
+  $('#new-results').querySelectorAll('.hit').forEach(x => x.classList.toggle('on', x === b));
+};
+$('#new-mappick').onclick = () => {
+  togglePanel(null);
+  picking = { isNew: true };
+  $('#pick-text').textContent = '새 장소: 지도에서 위치를 누르세요';
+  $('#pickbar').hidden = false;
+  document.body.classList.add('picking');
+};
+$('#new-here').onclick = async () => {
+  try { setStatus('위치 찾는 중…'); const ll = await myPosition(); setStatus(null); $('#new-form').elements.addr.value = ''; setNewLL(ll); }
+  catch (e) { setStatus(e.message, true); }
+};
+$('#btn-add').onclick = () => openNew();
+$('#new-cancel').onclick = () => { clear(newObjs); togglePanel(null); };
 $('#new-form').onsubmit = async e => {
   e.preventDefault();
   const el = e.target.elements;
@@ -1115,6 +1206,7 @@ $('#new-form').onsubmit = async e => {
   try {
     const text = newNoteText({ name, region, type: el.type.value, addr: el.addr.value.trim(), ll: newLL, memo: el.memo.value });
     const r = await submit({ kind: 'create', path: `${region}/${name}.md`, text, message: `${appTag()}: ${name} 추가` });
+    clear(newObjs);
     togglePanel(null);
     setStatus(r === 'queued' ? QUEUED_MSG : '추가됨');
     nav(name);
@@ -1343,7 +1435,7 @@ async function load() {
 // Chrome·삼성 인터넷·Edge는 beforeinstallprompt로 설치 창을 직접 띄우고, 안 되는 브라우저(아이폰 등)는 방법을 보여준다.
 const standalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 let installEvt = null;
-const setBar = hidden => { $('#installbar').hidden = hidden; document.body.classList.toggle('has-installbar', !hidden); };
+const setBar = hidden => { $('#installbar').hidden = hidden; document.body.classList.toggle('has-installbar', !hidden); placeAdd(); };
 function syncInstall() {
   const done = standalone();
   $('#install-btn').hidden = done;
