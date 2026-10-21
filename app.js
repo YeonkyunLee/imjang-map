@@ -914,6 +914,56 @@ function stageHtml(z) {
     <div class="sub">${esc(z.properties.p || z.properties.n)}</div></div>`;
 }
 
+// ---------- 구역 안 빌라 실거래 (villas.json: 서울부동산정보광장, 매일 자동 갱신) ----------
+// trades: [pnu, lat, lng, 건물명, 준공, 전용㎡, 대지권㎡, 계약일, 금액(만원), 층]
+let villas = null, villasLoading = null;
+function loadVillas() {
+  villasLoading ||= fetch('villas.json').then(r => (r.ok ? r.json() : Promise.reject(new Error(`빌라 실거래 자료 실패 (${r.status})`))))
+    .then(j => (villas = j)).catch(e => { villasLoading = null; throw e; });
+  return villasLoading;
+}
+const PY = 3.3058;
+const won = v => (v >= 10000 ? `${(v / 10000).toFixed(v >= 100000 ? 1 : 2).replace(/\.?0+$/, '')}억` : `${Math.round(v).toLocaleString()}만`);
+const median = a => { const s = [...a].sort((x, y) => x - y); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : null; };
+const jibunOf = p => `${p[10] === '2' ? '산' : ''}${+p.slice(11, 15)}${+p.slice(15, 19) ? '-' + +p.slice(15, 19) : ''}`;
+let villaRows = [];
+async function fillVillas(n) {
+  const box = $('#sheet-body .villa');
+  if (!box) return;
+  try { await Promise.all([loadVillas(), loadZones()]); } catch (e) { box.innerHTML = `<p class="hint err">${esc(e.message)}</p>`; return; }
+  if (currentNote() !== n) return;
+  const zs = zonesAt(n.ll).filter(z => z.properties.k !== '촉진지구' && z.properties.k !== '존치');
+  const zone = zs.find(z => zoneState(z) === 'active') || zs[0];
+  const R = 0.3;
+  const rows = villas.trades.filter(t => (zone ? inZone(zone, [t[1], t[2]]) : distKm(n.ll, [t[1], t[2]]) <= R));
+  villaRows = rows;
+  const yearAgo = new Date(Date.now() - 365 * 864e5).toLocaleDateString('sv-SE');
+  const recent = rows.filter(t => t[7] >= yearAgo);
+  const base = recent.length >= 5 ? recent : rows;
+  const scope = zone ? `${esc(zone.properties.n || '구역')} 경계 안` : `반경 ${R * 1000}m (구역 경계 자료 없음)`;
+  const dongCode = (rows[0]?.[0] || '').slice(0, 10);
+  const hs = villas.houses[dongCode];
+  const hRecent = hs ? hs.t.filter(h => h[2]) : [];
+  box.innerHTML = `<div class="villa-top"><span class="k">빌라 실거래</span><b>${rows.length}건</b><span class="sub">${scope} · 최근 ${villas.months}개월</span></div>
+    ${rows.length ? `<div class="stats">
+      <div class="stat"><span class="k">거래가 중위${base === recent ? ' (1년)' : ''}</span><b>${won(median(base.map(t => t[8])))}</b></div>
+      <div class="stat"><span class="k">대지 평당</span><b>${won(median(base.filter(t => t[6]).map(t => t[8] / (t[6] / PY))))}</b></div>
+      <div class="stat"><span class="k">전용 평당</span><b>${won(median(base.map(t => t[8] / (t[5] / PY))))}</b></div></div>
+    <div class="vlist">${rows.slice(0, 8).map((t, i) => villaRow(t, i)).join('')}</div>
+    ${rows.length > 8 ? `<button class="btn sm" data-act="villa-more">${rows.length - 8}건 더 보기</button>` : ''}`
+    : '<p class="hint">이 범위에 최근 빌라 거래가 없습니다. 단독·다가구 위주 구역일 수 있어요.</p>'}
+    ${hRecent.length ? `<div class="houses"><span class="k">같은 동 단독·다가구 ${hRecent.length}건 (지번 비공개, ${esc(hs.n)})</span>
+      토지 평당 중위 <b>${won(median(hRecent.map(h => h[1] / (h[2] / PY))))}</b> · 최근: ${hRecent.slice(0, 3).map(h => `${h[0].slice(2).replace(/-/g, '.')} ${won(h[1])}(토지 ${Math.round(h[2])}㎡)`).join(', ')}</div>` : ''}
+    <div class="sub">출처: 서울부동산정보광장 · ${esc(villas.updated)} 갱신 · 해제 거래 제외. 대지 평당 = 거래가 ÷ 대지권(평). 신축⚠(2018~)은 권리산정기준일 이후면 입주권이 안 나올 수 있으니 구역별 기준일 확인</div>`;
+}
+function villaRow(t, i) {
+  const [p, , , rawName, year, area, land, date, price, floor] = t;
+  const name = String(rawName || '').replace(/\s*\([^)]*\)\s*$/, '');
+  return `<button class="vrow" data-act="villa-show" data-i="${i}"><span class="d">${date.slice(2).replace(/-/g, '.')}</span>
+    <span class="t"><b>${esc(name || jibunOf(p))}</b>${name ? ` <small>${jibunOf(p)}</small>` : ''}<small>${year >= 2018 ? '<i class="newb" title="권리산정기준일 이후 신축·지분쪼개기면 입주권 대신 현금청산될 수 있음">신축⚠</i> ' : ''}${year || '—'}년 · 전용 ${area}㎡${land ? ` · 대지 ${land}㎡` : ''} · ${floor}층</small></span>
+    <span class="v">${won(price)}${land ? `<small>대지평 ${won(price / (land / PY))}</small>` : ''}</span></button>`;
+}
+
 // 노트 본문을 ## 단위 카드로. '출처'·'참고'는 접어 둠
 function sectionize(md) {
   const kids = [...md.childNodes];
@@ -977,6 +1027,7 @@ function showNote(name, doFocus = true) {
       <div class="stats">${stat('세대', f.세대 && `${Number(f.세대).toLocaleString()}세대`)}${stat('준공', f.준공 && `${f.준공}년`)}${stat(f.방문일 ? '방문' : '조사', day(f.방문일) || day(f.조사일))}</div>
     </div>` : ''}
     ${stageZone ? stageHtml(stageZone) : ''}
+    ${n.isPlace && n.ll && (f.유형 === '재개발구역' || stageZone) ? '<div class="villa card"><p class="hint">빌라 실거래 불러오는 중…</p></div>' : ''}
     ${f.주소 ? `<div class="addr card"><span class="ic">📍</span><span class="t">${esc(f.주소)}</span><button class="copy" data-act="copy-addr" title="주소 복사">복사</button></div>` : ''}
     ${inZones.length ? `<div class="zones-in">${inZones.map(z => `<div class="zp"><i style="background:${ZONE_COLOR[z.properties.k]}"></i>${esc(zoneLabel(z))}</div>`).join('')}</div>` : ''}
     ${acts.length ? `<div class="tiles">${acts.join('')}</div>` : ''}
@@ -988,6 +1039,7 @@ function showNote(name, doFocus = true) {
   $('#sheet-body').querySelectorAll('.md a[href^="http"]').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
   $('#sheet').hidden = false;
   loadAtts();
+  fillVillas(n);
   if (n.isPlace) pnuOf(n).then(pnu => {
     const a = $('#sheet-body [data-act="eum"]');
     if (a && pnu && currentNote() === n) { a.href = EUM_LAND(pnu); a.title = `토지이용계획 (PNU ${pnu})`; }
@@ -1139,6 +1191,11 @@ $('#sheet-body').onclick = async e => {
   if (act === 'pick') startPick(n);
   if (act === 'walk') walkTo(n);
   if (act === 'today') { toggleToday(n); showNote(n.name, false); }
+  if (act === 'villa-more') { $('#sheet-body .vlist').innerHTML = villaRows.map((t, i) => villaRow(t, i)).join(''); e.target.remove(); }
+  if (act === 'villa-show') {
+    const t = villaRows[e.target.closest('[data-i]').dataset.i];
+    showCandidate({ ll: [t[1], t[2]] });
+  }
   if (act === 'edit-cancel') showNote(n.name, false);
   if (act === 'edit-info') {
     const f = n.fm, v = x => esc(x instanceof Date ? x.toISOString().slice(0, 10) : x ?? '');

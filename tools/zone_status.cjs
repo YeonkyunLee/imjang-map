@@ -54,7 +54,7 @@ const num = s => (String(s).replace(/\s/g, '').match(/[가-힣]+(\d+(?:-\d+)?)/)
   let ws;
   try {
     let target;
-    for (let i = 0; i < 40 && !target; i++) { await sleep(250); try { target = (await (await fetch('http://127.0.0.1:9346/json')).json()).find(t => t.type === 'page'); } catch {} }
+    for (let i = 0; i < 40 && !target; i++) { await sleep(250); try { target = (await (await fetch('http://127.0.0.1:9346/json')).json()).find(t => t.type === 'page' && t.url === 'about:blank'); } catch {} }
     ws = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise(r => ws.onopen = r);
     let id = 0; const pending = new Map();
