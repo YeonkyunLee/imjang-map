@@ -336,3 +336,22 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 .item-price small { font-size: 12px; font-weight: 700; margin-left: 1px; }
 
 .region .mocs a { color: var(--accent); text-decoration: none; font-weight: 600; font-size: 12.5px; }
+/* 목록 도구·오늘 동선 */
+.list-tools { gap: 6px; margin-bottom: 10px; }
+.list-tools #search { flex: 1; min-width: 0; margin: 0; }
+.list-tools select { flex: none; padding: 7px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 13px; }
+.today { border-color: color-mix(in srgb, #d93025 35%, transparent); background: color-mix(in srgb, #d93025 6%, var(--card)); }
+.today-top { display: flex; align-items: center; gap: 6px; }
+.today-top b { flex: 1; font-size: 14px; }
+.today-list { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 13px; }
+.today-list a { color: var(--fg); text-decoration: none; font-weight: 600; }
+
+/* 정보 수정 */
+.price.card { position: relative; }
+.edit-info { position: absolute; right: 10px; bottom: 10px; border: 0; background: none; font-size: 12px; color: var(--muted); cursor: pointer; padding: 2px 4px; }
+.price .stats { margin-bottom: 14px; }
+.info-form { display: grid; gap: 8px; }
+.info-form .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.info-form label { font-size: 12px; color: var(--muted); font-weight: 600; display: flex; flex-direction: column; gap: 3px; }
+.info-form input, .info-form select { padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--fg); font-size: 14px; font-weight: 500; }
+.info-form .row { gap: 6px; }

@@ -487,8 +487,20 @@ function drawList() {
   const shown = places().filter(n => passes(n) && hit(n));
   const regions = [...new Set(shown.map(n => n.region))].sort((a, b) => a.localeCompare(b, 'ko'));
   const order = { '1순위': 0, '추천': 1, '후보': 2, '미평가': 3, '탈락': 4 };
-  $('#list-body').innerHTML = regions.map(r => {
-    const items = shown.filter(n => n.region === r).sort((a, b) => (order[a.rating] - order[b.rating]) || a.name.localeCompare(b.name, 'ko'));
+  const price = n => parseFloat(n.fm.시세) || null;
+  const byName_ = (a, b) => a.name.localeCompare(b.name, 'ko');
+  const cmp = {
+    평가: (a, b) => (order[a.rating] - order[b.rating]) || byName_(a, b),
+    저가: (a, b) => ((price(a) ?? 1e9) - (price(b) ?? 1e9)) || byName_(a, b), // 시세 없는 곳은 뒤로
+    고가: (a, b) => ((price(b) ?? -1) - (price(a) ?? -1)) || byName_(a, b),
+    이름: byName_,
+  }[listSort] || byName_;
+  const inToday = todayList.filter(nm => byName.get(nm));
+  $('#list-body').innerHTML = (inToday.length ? `<div class="today card"><div class="today-top"><b>🚩 오늘 동선 ${inToday.length}곳</b>
+      <button class="btn sm primary" data-today="go">동선 보기</button><button class="btn sm" data-today="clear">비우기</button></div>
+      <div class="today-list">${inToday.map((nm, k) => `<a href="#" data-note="${esc(nm)}">${k + 1}. ${esc(nm)}</a>`).join('')}</div></div>` : '')
+  + regions.map(r => {
+    const items = shown.filter(n => n.region === r).sort(cmp);
     const mocs = notes.filter(n => n.isMoc && n.region === r);
     return `<div class="region"><h3>${esc(r)} <span class="n">${items.length}</span>
       ${routes[r]?.length ? `<button class="btn sm" data-route="${esc(r)}">동선 ${routes[r].length}곳</button>` : ''}</h3>
@@ -500,7 +512,12 @@ function drawList() {
   }).join('') || '<p class="hint">조건에 맞는 장소가 없습니다.</p>';
 }
 $('#search').oninput = drawList;
+let listSort = store.get('listSort', '평가');
+$('#sort').value = listSort;
+$('#sort').onchange = () => { listSort = $('#sort').value; store.set('listSort', listSort); drawList(); };
 $('#list-body').onclick = e => {
+  const td = e.target.closest('[data-today]');
+  if (td) { td.dataset.today === 'go' ? startToday() : (todayList = [], syncToday(), drawList(), drawRoute()); return; }
   const rt = e.target.closest('[data-route]');
   if (rt) { startRoute(rt.dataset.route); return; }
   const el = e.target.closest('[data-note]'); if (!el) return;
@@ -534,6 +551,35 @@ function parseRoutes() {
     }
   }
   return out;
+}
+
+// ---------- 오늘 동선: 상세에서 담은 곳 (이 폰에만 저장). 보기 누르면 내 위치에서 가까운 순으로 ----------
+const TODAY = '오늘';
+let todayList = store.get('today', []);
+function syncToday() {
+  if (notes.length) todayList = todayList.filter(nm => byName.get(nm)?.isPlace);
+  store.set('today', todayList);
+  routes[TODAY] = [...todayList];
+}
+function toggleToday(n) {
+  const had = todayList.includes(n.name);
+  todayList = had ? todayList.filter(x => x !== n.name) : [...todayList, n.name];
+  syncToday(); drawList(); drawRoute();
+  setStatus(had ? '오늘 동선에서 뺐습니다' : `오늘 동선에 담았습니다 (${todayList.length}곳)`);
+}
+async function startToday() {
+  if (!todayList.length) return;
+  let cur = null;
+  try { setStatus('내 위치 찾는 중…'); cur = await myPosition(); setStatus(null); } catch { setStatus('위치를 몰라 담은 순서대로 보여줍니다'); }
+  const left = todayList.map(nm => byName.get(nm)).filter(n => n?.ll), out = [];
+  if (!cur && left.length) cur = left[0].ll;
+  while (left.length) { // 가장 가까운 곳부터 차례로
+    left.sort((a, b) => distKm(cur, a.ll) - distKm(cur, b.ll));
+    const n = left.shift(); out.push(n.name); cur = n.ll;
+  }
+  todayList = [...out, ...todayList.filter(nm => !out.includes(nm))];
+  syncToday();
+  startRoute(TODAY);
 }
 
 function startRoute(region) {
@@ -907,6 +953,7 @@ function showNote(name, doFocus = true) {
     n.isPlace && tile('🏠', '네이버부동산', ext(`https://m.land.naver.com/search/result/${q}`)),
     n.isPlace && (f.주소 || n.ll) && tile('📜', '토지이음', { ...ext(EUM_HOME), 'data-act': 'eum' }),
     n.isPlace && tile('📌', n.ll ? '위치 수정' : '위치 지정', { 'data-act': 'pick' }),
+    n.isPlace && tile(todayList.includes(n.name) ? '✅' : '🚩', todayList.includes(n.name) ? '동선에서 빼기' : '오늘 동선', { 'data-act': 'today' }),
   ].filter(Boolean);
   const band = priceBand(f.시세);
   const stat = (k, v) => `<div class="stat"><span class="k">${k}</span><b>${v ? esc(v) : '—'}</b></div>`;
@@ -924,6 +971,7 @@ function showNote(name, doFocus = true) {
       ${!n.ll ? '<span class="pill warn">좌표 없음</span>' : ''}${queue.some(o => o.path === n.path) ? '<span class="pill warn">저장 대기</span>' : ''}
       ${n.error ? '<span class="pill warn">frontmatter 오류</span>' : ''}</div>` : ''}
     ${n.isPlace ? `<div class="price card">
+      <button class="edit-info" data-act="edit-info" title="시세·세대·준공·주소·유형 수정">✏️ 수정</button>
       <div class="price-main">${f.시세 ? `<b>${esc(f.시세)}</b><span class="unit">억</span>${f.시세평형 ? `<span class="py">${esc(f.시세평형)}</span>` : ''}` : '<span class="none">시세 정보 없음</span>'}
         <span class="band" style="--c:${PRICE_COLOR[band]}">${band}</span></div>
       <div class="stats">${stat('세대', f.세대 && `${Number(f.세대).toLocaleString()}세대`)}${stat('준공', f.준공 && `${f.준공}년`)}${stat(f.방문일 ? '방문' : '조사', day(f.방문일) || day(f.조사일))}</div>
@@ -1033,6 +1081,27 @@ async function addPhotos(n, files) {
     box?.classList.remove('busy');
   }
 }
+// 정보 수정 저장: 바뀐 칸만 frontmatter에 반영. 시세를 바꾸면 조사일도 오늘로
+$('#sheet-body').addEventListener('submit', async e => {
+  if (!e.target.matches('.info-form')) return;
+  e.preventDefault();
+  const n = currentNote();
+  if (!n) return;
+  const el = e.target.elements, fields = {};
+  const old = k => (n.fm[k] instanceof Date ? n.fm[k].toISOString().slice(0, 10) : String(n.fm[k] ?? ''));
+  for (const k of ['시세', '시세평형', '세대', '준공', '주소', '유형']) {
+    let val = el[k].value.trim();
+    if (k === '시세') val = val.replace(/억|,|\s/g, '');
+    if (k === '세대') val = val.replace(/[^\d]/g, '');
+    if (val === old(k)) continue;
+    if (k === '시세' && val && !Number.isFinite(+val)) { setStatus('시세는 숫자(억)로 적어 주세요', true); return; }
+    fields[k] = /[:#[\]{}]|^[\s'"]/.test(val) ? JSON.stringify(val) : val; // YAML이 깨지지 않게
+  }
+  if (!Object.keys(fields).length) { showNote(n.name, false); return; }
+  if ('시세' in fields) fields.조사일 = today();
+  if (await save(n, { type: 'fields', fields }, `정보 수정 (${Object.keys(fields).filter(k => k !== '조사일').join('·')})`, '저장됨')) showNote(n.name, false);
+});
+
 $('#sheet-body').addEventListener('change', e => {
   if (e.target.id !== 'photo-input' || !e.target.files.length) return;
   const n = currentNote();
@@ -1069,6 +1138,23 @@ $('#sheet-body').onclick = async e => {
   if (act === 'focus' && n.ll) focus(n.ll);
   if (act === 'pick') startPick(n);
   if (act === 'walk') walkTo(n);
+  if (act === 'today') { toggleToday(n); showNote(n.name, false); }
+  if (act === 'edit-cancel') showNote(n.name, false);
+  if (act === 'edit-info') {
+    const f = n.fm, v = x => esc(x instanceof Date ? x.toISOString().slice(0, 10) : x ?? '');
+    $('#sheet-body .price').innerHTML = `<form class="info-form">
+      <div class="grid2">
+        <label>시세 (억)<input name="시세" inputmode="decimal" value="${v(f.시세)}" placeholder="예: 12.5"></label>
+        <label>평형<input name="시세평형" value="${v(f.시세평형)}" placeholder="84㎡"></label>
+        <label>세대<input name="세대" inputmode="numeric" value="${v(f.세대)}"></label>
+        <label>준공<input name="준공" inputmode="numeric" value="${v(f.준공)}" placeholder="연도"></label>
+      </div>
+      <label>주소<input name="주소" value="${v(f.주소)}"></label>
+      <label>유형<select name="유형">${FILTERS.유형.map(t => `<option${t === f.유형 ? ' selected' : ''}>${t}</option>`).join('')}</select></label>
+      <div class="row"><button type="submit" class="btn primary">저장</button><button type="button" class="btn" data-act="edit-cancel">취소</button></div>
+    </form>`;
+    $('#sheet-body .info-form input').focus();
+  }
   if (act === 'copy-addr') {
     try { await navigator.clipboard.writeText(String(n.fm.주소)); setStatus('주소 복사됨'); } catch { setStatus('복사 실패 — 주소를 길게 눌러 복사하세요', true); }
   }
@@ -1445,6 +1531,7 @@ function render(info, doRoute = true) {
   byName.clear();
   for (const n of notes) byName.set(n.name, n);
   routes = parseRoutes();
+  syncToday();
   refresh();
   drawRoute();
   drawInfo();
