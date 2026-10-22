@@ -936,7 +936,7 @@ async function fillVillas(n) {
   const zone = zs.find(z => zoneState(z) === 'active') || zs[0];
   const R = 0.3;
   const rows = villas.trades.filter(t => (zone ? inZone(zone, [t[1], t[2]]) : distKm(n.ll, [t[1], t[2]]) <= R));
-  villaRows = rows;
+  villaAll = rows;
   const yearAgo = new Date(Date.now() - 365 * 864e5).toLocaleDateString('sv-SE');
   const recent = rows.filter(t => t[7] >= yearAgo);
   const base = recent.length >= 5 ? recent : rows;
@@ -949,18 +949,36 @@ async function fillVillas(n) {
       <div class="stat"><span class="k">거래가 중위${base === recent ? ' (1년)' : ''}</span><b>${won(median(base.map(t => t[8])))}</b></div>
       <div class="stat"><span class="k">대지 평당</span><b>${won(median(base.filter(t => t[6]).map(t => t[8] / (t[6] / PY))))}</b></div>
       <div class="stat"><span class="k">전용 평당</span><b>${won(median(base.map(t => t[8] / (t[5] / PY))))}</b></div></div>
-    <div class="vlist">${rows.slice(0, 8).map((t, i) => villaRow(t, i)).join('')}</div>
-    ${rows.length > 8 ? `<button class="btn sm" data-act="villa-more">${rows.length - 8}건 더 보기</button>` : ''}`
+    <div class="vtools">${Object.keys(VBANDS).map(b => `<button class="vchip" data-act="villa-band" data-v="${b}">${b} <span>${rows.filter(t => t[8] >= VBANDS[b][0] && t[8] < VBANDS[b][1]).length}</span></button>`).join('')}
+      <button class="vchip sort" data-act="villa-sort"></button></div>
+    <div class="vlist"></div>
+    <button class="btn sm" data-act="villa-more" hidden></button>`
     : '<p class="hint">이 범위에 최근 빌라 거래가 없습니다. 단독·다가구 위주 구역일 수 있어요.</p>'}
     ${hRecent.length ? `<div class="houses"><span class="k">같은 동 단독·다가구 ${hRecent.length}건 (지번 비공개, ${esc(hs.n)})</span>
       토지 평당 중위 <b>${won(median(hRecent.map(h => h[1] / (h[2] / PY))))}</b> · 최근: ${hRecent.slice(0, 3).map(h => `${h[0].slice(2).replace(/-/g, '.')} ${won(h[1])}(토지 ${Math.round(h[2])}㎡)`).join(', ')}</div>` : ''}
     <div class="sub">출처: 서울부동산정보광장 · ${esc(villas.updated)} 갱신 · 해제 거래 제외. 대지 평당 = 거래가 ÷ 대지권(평). 신축⚠(2018~)은 권리산정기준일 이후면 입주권이 안 나올 수 있으니 구역별 기준일 확인</div>`;
+  if (rows.length) renderVillaList();
+}
+// 금액대 칩·정렬(최신순 / 대지 평당 낮은순 — 같은 돈으로 땅을 더 사는 순)
+const VBANDS = { 전체: [0, 1e9], '1~5억': [10000, 50000], '5~8억': [50000, 80000], '8억~': [80000, 1e9] };
+let villaAll = [], villaBand = store.get('villaBand', '전체'), villaSort = store.get('villaSort', '최신');
+function renderVillaList(limit = 8) {
+  const [lo, hi] = VBANDS[villaBand] || VBANDS.전체;
+  let rows = villaAll.filter(t => t[8] >= lo && t[8] < hi);
+  if (villaSort === '대지평') rows = [...rows].sort((a, b) => (a[6] ? a[8] / a[6] : 1e12) - (b[6] ? b[8] / b[6] : 1e12));
+  villaRows = rows;
+  $('#sheet-body .vlist').innerHTML = rows.slice(0, limit).map((t, i) => villaRow(t, i)).join('') || '<p class="hint">이 금액대 거래가 없습니다</p>';
+  const more = $('#sheet-body [data-act="villa-more"]');
+  more.hidden = rows.length <= limit;
+  more.textContent = `${rows.length - limit}건 더 보기`;
+  $('#sheet-body').querySelectorAll('.vchip[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === villaBand));
+  $('#sheet-body .vchip.sort').textContent = villaSort === '대지평' ? '↕ 대지평 낮은순' : '↕ 최신순';
 }
 function villaRow(t, i) {
   const [p, , , rawName, year, area, land, date, price, floor] = t;
   const name = String(rawName || '').replace(/\s*\([^)]*\)\s*$/, '');
   return `<button class="vrow" data-act="villa-show" data-i="${i}"><span class="d">${date.slice(2).replace(/-/g, '.')}</span>
-    <span class="t"><b>${esc(name || jibunOf(p))}</b>${name ? ` <small>${jibunOf(p)}</small>` : ''}<small>${year >= 2018 ? '<i class="newb" title="권리산정기준일 이후 신축·지분쪼개기면 입주권 대신 현금청산될 수 있음">신축⚠</i> ' : ''}${year || '—'}년 · 전용 ${area}㎡${land ? ` · 대지 ${land}㎡` : ''} · ${floor}층</small></span>
+    <span class="t"><b>${esc(name || jibunOf(p))}</b>${name ? ` <small class="jb">${jibunOf(p)}</small>` : ''}<small>${year >= 2018 ? '<i class="newb" title="권리산정기준일 이후 신축·지분쪼개기면 입주권 대신 현금청산될 수 있음">신축⚠</i> ' : ''}${year || '—'}년 · 전용 ${area}㎡${land ? ` · 대지 ${land}㎡` : ''} · ${floor}층</small></span>
     <span class="v">${won(price)}${land ? `<small>대지평 ${won(price / (land / PY))}</small>` : ''}</span></button>`;
 }
 
@@ -1191,7 +1209,9 @@ $('#sheet-body').onclick = async e => {
   if (act === 'pick') startPick(n);
   if (act === 'walk') walkTo(n);
   if (act === 'today') { toggleToday(n); showNote(n.name, false); }
-  if (act === 'villa-more') { $('#sheet-body .vlist').innerHTML = villaRows.map((t, i) => villaRow(t, i)).join(''); e.target.remove(); }
+  if (act === 'villa-more') renderVillaList(Infinity);
+  if (act === 'villa-band') { villaBand = e.target.closest('[data-v]').dataset.v; store.set('villaBand', villaBand); renderVillaList(); }
+  if (act === 'villa-sort') { villaSort = villaSort === '대지평' ? '최신' : '대지평'; store.set('villaSort', villaSort); renderVillaList(); }
   if (act === 'villa-show') {
     const t = villaRows[e.target.closest('[data-i]').dataset.i];
     showCandidate({ ll: [t[1], t[2]] });

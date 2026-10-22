@@ -367,7 +367,7 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 .vrow .d { font-size: 11px; color: var(--muted); width: 52px; flex: none; }
 .vrow .t { flex: 1; min-width: 0; font-size: 13px; line-height: 1.3; }
 .vrow .t small { display: block; font-size: 11px; color: var(--muted); }
-.vrow .t b + small { display: inline; margin-left: 4px; }
+.vrow .t small.jb { display: inline; margin-left: 4px; }
 .vrow .v { text-align: right; font-weight: 800; font-size: 14px; white-space: nowrap; }
 .vrow .v small { display: block; font-size: 10.5px; font-weight: 600; color: var(--muted); }
 .houses { font-size: 13px; margin: 6px 0 8px; line-height: 1.5; }
@@ -375,3 +375,9 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 .villa > .sub { font-size: 11px; color: var(--muted); margin-top: 6px; }
 
 .newb { font-style: normal; font-weight: 700; color: #b45309; }
+.vtools { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+.vchip { border: 1px solid var(--card-line); background: var(--bg); color: var(--fg); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.vchip span { color: var(--muted); font-weight: 500; }
+.vchip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.vchip.on span { color: #fff; opacity: .85; }
+.vchip.sort { margin-left: auto; }
