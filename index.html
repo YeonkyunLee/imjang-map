@@ -58,6 +58,11 @@
   <span id="walk-text"></span>
   <button id="walk-close" class="btn" title="경로 지우기">✕</button>
 </div>
+<div id="measurebar" hidden>
+  <span>📏</span><span id="measure-text"></span>
+  <button id="measure-undo" class="btn" title="마지막 지점 지우기">↶</button>
+  <button id="measure-close" class="btn" title="거리 재기 끝">✕</button>
+</div>
 <div id="status" hidden></div>
 
 <section id="panel-filter" class="panel" hidden>
@@ -152,6 +157,16 @@
   </form>
 </section>
 
+<section id="panel-compare" class="panel" hidden>
+  <h3>⚖️ 단지 비교</h3>
+  <div id="compare-body"></div>
+</section>
+
+<div id="maptools">
+  <button id="mt-measure" title="거리 재기">📏</button>
+  <button id="mt-terrain" title="지형도 (경사)">⛰️</button>
+</div>
+<button id="comparechip" hidden></button>
 <button id="btn-add" title="임장할 곳 추가">＋ 추가</button>
 <div id="roadview" hidden>
   <div class="rv-head"><b id="roadview-title">로드뷰</b><button id="roadview-close" class="btn" title="닫기">✕</button></div>

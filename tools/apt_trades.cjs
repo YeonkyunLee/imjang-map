@@ -4,7 +4,9 @@
 //
 // 자료: 서울부동산정보광장 아파트 실거래(기간 조회, 해제 거래 제외). 단지 좌표는 단지 필지번호(PNU)를 카카오 지오코더로
 // (tools/pnucache.json 공유 캐시). 네이버 단지 코드도 같이 저장해 앱에서 네이버 매물로 바로 연결.
-// 출력: { updated, months, c: { pnu: [이름, 준공, lat, lng, 네이버코드] }, t: [[pnu 번호(c 순서), YYMMDD, 전용×10, 금액(만원), 층], ...] }
+// 전세: 같은 사이트 전월세(전세, 최근 12개월, 신규 계약만 — 갱신은 5% 상한이라 시세와 거리가 있음).
+// 출력: { updated, months, c: [[pnu, 이름, 준공, lat, lng, 네이버코드]], t: [[c 순서, YYMMDD, 전용×10, 금액(만원), 층], ...],
+//         r: [[c 순서, YYMMDD, 전용×10, 보증금(만원)], ...] }
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -16,6 +18,7 @@ const BROWSER = process.env.BROWSER || 'C:/Program Files (x86)/Microsoft/Edge/Ap
 const CACHE = path.join(__dirname, 'pnucache.json');
 const OUT = path.join(ROOT, 'apts.json');
 const MONTHS = 36;
+const RENT_MONTHS = 12;
 const SGG = { 11620: '관악구', 11590: '동작구', 11560: '영등포구', 11530: '구로구', 11215: '광진구', 11260: '중랑구', 11545: '금천구',
   11350: '노원구', 11320: '도봉구', 11305: '강북구', 11380: '은평구', 11230: '동대문구', 11650: '서초구' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -73,8 +76,9 @@ async function withKakao(fn) {
   const end = new Date(), start = new Date(end.getFullYear(), end.getMonth() - MONTHS, 1);
   const d8 = d => d.toLocaleDateString('sv-SE').replace(/-/g, '');
   const cx = {}; // pnu → [이름, 준공, 네이버코드, 동이름]
-  const trades = [];
+  const trades = [], rents = [];
   let failed = 0;
+  const rstart = new Date(end.getFullYear(), end.getMonth() - RENT_MONTHS, 1);
   for (const [sgg, gu] of Object.entries(SGG)) {
     const dongs = (await post(`${BASE}/common/getBjdongList.do`, `sggCd=${sgg}`)).result || [];
     for (const d of dongs) {
@@ -103,7 +107,26 @@ async function withKakao(fn) {
         trades.push([pnu, +dt.replace(/\./g, ''), Math.round(area * 10), num(cells[4][0]), parseInt(cells[5][0]) || null]);
         n++;
       }
-      console.log(`  ${gu} ${d.bjdongNm}: ${n}`);
+      // 전세: 한 줄 = 단지·평형, 계약들은 칸 안에 <br>로 나열. 칸 3 계약일, 5 보증금, 7 신규/갱신
+      let rn = 0;
+      try {
+        const j = await post(`${BASE}/rent/getRentPriceList.do`,
+          `sggCd=${sgg}&bjdongCd=${d.bjdongCd}&selectGubun=2&rnCd=&rentCd=1&startDate=${d8(rstart)}&endDate=${d8(end)}&bldgNm=&bldgGbn=AP`);
+        let rp = null;
+        for (const tr of (j.result?.[0]?.HTML || '').match(/<tr[\s\S]*?<\/tr>/g) || []) {
+          const cells = (tr.match(/<td[\s\S]*?<\/td>/g) || []).map(cellVals);
+          if (cells.length < 9) continue;
+          rp = (tr.match(/landCd='(\d{19})'/) || [])[1] || rp;
+          const area = num(cells[2][0]);
+          if (!rp || !area) continue;
+          cells[3].forEach((dt, k) => {
+            if (!/^\d{2}\.\d{2}\.\d{2}$/.test(dt) || cells[7][k] === '갱신' || !num(cells[5][k])) return;
+            rents.push([rp, +dt.replace(/\./g, ''), Math.round(area * 10), num(cells[5][k])]);
+            rn++;
+          });
+        }
+      } catch (e) { console.log('  전세 실패', gu, d.bjdongNm, e.message); }
+      console.log(`  ${gu} ${d.bjdongNm}: ${n} · 전세 ${rn}`);
       await sleep(250);
     }
   }
@@ -132,9 +155,10 @@ async function withKakao(fn) {
     updated: new Date().toLocaleDateString('sv-SE'), months: MONTHS, source: '서울부동산정보광장 아파트 실거래',
     c: keys.map(p => [p, cx[p][0], cx[p][1], ...cache.pnu[p], cx[p][2]]),
     t: trades.filter(t => t[0] in idx).map(([p, ...r]) => [idx[p], ...r]).sort((a, b) => b[1] - a[1]),
+    r: rents.filter(t => t[0] in idx).map(([p, ...r]) => [idx[p], ...r]).sort((a, b) => b[1] - a[1]),
   };
   const prev = fs.existsSync(OUT) ? JSON.parse(fs.readFileSync(OUT, 'utf8')) : null;
-  if (prev && JSON.stringify([prev.c, prev.t]) === JSON.stringify([out.c, out.t])) { console.log('변경 없음'); return; }
+  if (prev && JSON.stringify([prev.c, prev.t, prev.r]) === JSON.stringify([out.c, out.t, out.r])) { console.log('변경 없음'); return; }
   fs.writeFileSync(OUT, JSON.stringify(out));
-  console.log(`단지 ${out.c.length} · 거래 ${out.t.length}${failed ? ` · 실패 동 ${failed}` : ''} → apts.json`);
+  console.log(`단지 ${out.c.length} · 거래 ${out.t.length} · 전세 ${out.r.length}${failed ? ` · 실패 동 ${failed}` : ''} → apts.json`);
 })().catch(e => { console.error(e); process.exit(1); });

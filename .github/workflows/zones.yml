@@ -1,6 +1,6 @@
 name: 정비구역 단계·빌라·아파트 실거래 갱신
 
-# 매일 아침 정비사업 정보몽땅의 진행 단계(zones.json)와 서울부동산정보광장 빌라 실거래(villas.json)를 갱신. 바뀐 게 있을 때만 커밋하고 Pages를 다시 빌드한다.
+# 매일 아침 정비사업 정보몽땅의 진행 단계(zones.json)와 서울부동산정보광장 빌라·아파트 실거래·아파트 전세(villas.json, apts.json)를 갱신. 바뀐 게 있을 때만 커밋하고 Pages를 다시 빌드한다.
 on:
   schedule:
     - cron: '30 21 * * *' # 매일 06:30 KST
@@ -15,7 +15,7 @@ concurrency: zones
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,7 +29,10 @@ jobs:
         env:
           BROWSER: google-chrome
         run: node tools/villa_trades.cjs
-      - name: 아파트 실거래 갱신
+      - name: 아파트 실거래·전세 갱신
+        # 매매 36개월 + 전세 12개월이라 오래 걸림. 실패·시간 초과해도 위 단계 결과는 커밋 (apts.json은 끝까지 받아야 씀)
+        timeout-minutes: 75
+        continue-on-error: true
         env:
           BROWSER: google-chrome
         run: node tools/apt_trades.cjs

@@ -369,16 +369,16 @@ const ICON = {
   도시형생활주택: '<path d="M12 3l9 8h-2.5v9h-5v-6h-3v6h-5v-9H3l9-8z"/>',
   미확인: '<path d="M11 18h2v2h-2v-2zm1-14a5 5 0 0 1 5 5c0 2.2-1.6 3.1-2.5 3.8-.8.6-1.5 1.1-1.5 2.2v.5h-2V15c0-2 1.2-2.9 2.2-3.6.9-.7 1.8-1.2 1.8-2.4a3 3 0 0 0-6 0H7a5 5 0 0 1 5-5z"/>',
 };
-function pinMarkup({ type, color, mini, out, visited, star }) {
+function pinMarkup({ type, color, mini, out, visited, star, fresh }) {
   const t = ICON[type] ? type : '미확인';
   const cls = ['pin', t === '재개발구역' ? 'zone' : 'round', mini && 'mini', out && 'out'].filter(Boolean).join(' ');
-  const badges = mini ? '' : (visited ? '<b class="pb ok">✓</b>' : '') + (star ? '<b class="pb star">★</b>' : '');
+  const badges = mini ? '' : (visited ? '<b class="pb ok">✓</b>' : '') + (star ? '<b class="pb star">★</b>' : '') + (fresh ? '<b class="pb new" title="새 실거래">N</b>' : '');
   return `<div class="${cls}" style="--c:${color}"><svg viewBox="0 0 24 24">${ICON[t]}</svg>${badges}</div>`;
 }
 const pinColor = n => (colorBy === '평가' ? RATING_COLOR[n.rating] || RATING_COLOR.미평가 : PRICE_COLOR[priceBand(n.fm.시세)]);
 const pinHtml = (n, mini) => pinMarkup({
   type: n.fm.유형, color: pinColor(n), mini, out: n.fm.상태 === '제외',
-  visited: n.fm.상태 === '다녀옴', star: colorBy !== '평가' && n.rating === '1순위',
+  visited: n.fm.상태 === '다녀옴', star: colorBy !== '평가' && n.rating === '1순위', fresh: apts && hasNewTrade(n),
 });
 
 function drawMarkers() {
@@ -410,7 +410,7 @@ function focus(ll) {
 }
 
 // ---------- 패널 ----------
-const panels = { filter: '#panel-filter', list: '#panel-list', settings: '#panel-settings', new: '#panel-new', install: '#panel-install' };
+const panels = { filter: '#panel-filter', list: '#panel-list', settings: '#panel-settings', new: '#panel-new', install: '#panel-install', compare: '#panel-compare' };
 function togglePanel(name, force) {
   for (const [k, sel] of Object.entries(panels)) {
     const open = k === name ? (force ?? $(sel).hidden) : false;
@@ -448,6 +448,7 @@ for (const sel of Object.values(panels)) {
 function mapClick(ll) {
   if (Date.now() - longPressAt < 800) return; // 길게 누른 손을 뗄 때 오는 클릭
   if (picking) { pickAt(ll); return; }
+  if (measure) { measure.pts.push(ll); drawMeasure(); return; }
   togglePanel(null);
   if (zonesOn) zonePopup(ll); else closePopup();
 }
@@ -507,7 +508,7 @@ function drawList() {
       ${mocs.length ? `<div class="mocs">${mocs.map(m => `<a href="#" data-note="${esc(m.name)}">${esc(m.name)}</a>`).join('')}</div>` : ''}
       ${items.map(n => `<button class="item" data-note="${esc(n.name)}"><span class="item-ic">${pinHtml(n)}</span>
         <span class="name">${esc(n.name)}<span class="sub">${esc([n.fm.유형, n.fm.상태, n.rating !== '미평가' && n.rating].filter(Boolean).join(' · '))}</span>
-          ${queue.some(o => o.path === n.path) ? '<span class="tag">대기</span>' : ''}${n.ll ? '' : '<span class="tag warn">좌표 없음</span>'}</span>
+          ${queue.some(o => o.path === n.path) ? '<span class="tag">대기</span>' : ''}${n.ll ? '' : '<span class="tag warn">좌표 없음</span>'}${apts && hasNewTrade(n) ? '<span class="tag new">새 거래</span>' : ''}</span>
         <span class="item-price"${n.fm.시세 ? ` style="--c:${PRICE_COLOR[priceBand(n.fm.시세)]}"` : ''}>${n.fm.시세 ? `${esc(n.fm.시세)}<small>억</small>` : '<small>—</small>'}</span></button>`).join('')}</div>`;
   }).join('') || '<p class="hint">조건에 맞는 장소가 없습니다.</p>';
 }
@@ -757,7 +758,10 @@ function syncLegend() {
 function placeAdd() {
   const lg = $('#legendbar'), ib = $('#installbar');
   const base = ib.hidden ? 20 : 80;
-  $('#btn-add').style.bottom = `calc(${lg.hidden ? base : base - 8 + lg.offsetHeight + 10}px + env(safe-area-inset-bottom))`;
+  const b = lg.hidden ? base : base - 8 + lg.offsetHeight + 10;
+  $('#btn-add').style.bottom = `calc(${b}px + env(safe-area-inset-bottom))`;
+  $('#maptools').style.bottom = `calc(${b + 56}px + env(safe-area-inset-bottom))`;
+  $('#comparechip').style.bottom = `calc(${b + 4}px + env(safe-area-inset-bottom))`;
 }
 window.addEventListener('resize', () => placeAdd());
 $('#legendbar').onclick = e => {
@@ -863,6 +867,7 @@ function nav(name) {
 function route() {
   const m = location.hash.match(/^#note=(.+)$/);
   clearCand();
+  clear(nearObjs);
   if (m) showNote(decodeURIComponent(m[1])); else $('#sheet').hidden = true;
 }
 window.addEventListener('popstate', route);
@@ -937,6 +942,11 @@ async function fillVillas(n) {
   const R = 0.3;
   const rows = villas.trades.filter(t => (zone ? inZone(zone, [t[1], t[2]]) : distKm(n.ll, [t[1], t[2]]) <= R));
   villaAll = rows;
+  // 지난번에 열었을 때보다 늦은 거래는 NEW (처음 열면 표시 없음)
+  const vseen = store.get('vseen', {});
+  villaSeen = vseen[n.path] || '9999';
+  const top = rows.reduce((a, t) => (t[7] > a ? t[7] : a), '');
+  if (top && vseen[n.path] !== top) { vseen[n.path] = top; store.set('vseen', vseen); }
   const yearAgo = new Date(Date.now() - 365 * 864e5).toLocaleDateString('sv-SE');
   const recent = rows.filter(t => t[7] >= yearAgo);
   const base = recent.length >= 5 ? recent : rows;
@@ -961,6 +971,7 @@ async function fillVillas(n) {
 }
 // 금액대 칩·정렬(최신순 / 대지 평당 낮은순 — 같은 돈으로 땅을 더 사는 순)
 const VBANDS = { 전체: [0, 1e9], '1~5억': [10000, 50000], '5~8억': [50000, 80000], '8억~': [80000, 1e9] };
+let villaSeen = '9999';
 let villaAll = [], villaBand = store.get('villaBand', '전체'), villaSort = store.get('villaSort', '최신');
 function renderVillaList(limit = 8) {
   const [lo, hi] = VBANDS[villaBand] || VBANDS.전체;
@@ -977,19 +988,56 @@ function renderVillaList(limit = 8) {
 function villaRow(t, i) {
   const [p, , , rawName, year, area, land, date, price, floor] = t;
   const name = String(rawName || '').replace(/\s*\([^)]*\)\s*$/, '');
-  return `<button class="vrow" data-act="villa-show" data-i="${i}"><span class="d">${date.slice(2).replace(/-/g, '.')}</span>
+  return `<button class="vrow" data-act="villa-show" data-i="${i}"><span class="d">${date.slice(2).replace(/-/g, '.')}${date > villaSeen ? '<i class="nb">NEW</i>' : ''}</span>
     <span class="t"><b>${esc(name || jibunOf(p))}</b>${name ? ` <small class="jb">${jibunOf(p)}</small>` : ''}<small>${year >= 2018 ? '<i class="newb" title="권리산정기준일 이후 신축·지분쪼개기면 입주권 대신 현금청산될 수 있음">신축⚠</i> ' : ''}${year || '—'}년 · 전용 ${area}㎡${land ? ` · 대지 ${land}㎡` : ''} · ${floor}층</small></span>
     <span class="v">${won(price)}${land ? `<small>대지평 ${won(price / (land / PY))}</small>` : ''}</span></button>`;
 }
 
 // ---------- 아파트 실거래 (apts.json: 서울부동산정보광장, 매일 자동 갱신) ----------
 // c: [pnu, 이름, 준공, lat, lng, 네이버코드] · t: [단지번호, YYMMDD, 전용×10, 금액(만원), 층] (최신순)
-let apts = null, aptsLoading = null, aptTrades = null;
+// r: [단지번호, YYMMDD, 전용×10, 전세 보증금(만원)] (최근 12개월 신규 계약, 최신순)
+let apts = null, aptsLoading = null, aptTrades = null, aptRents = null;
 function loadApts() {
   aptsLoading ||= fetch('apts.json').then(r => (r.ok ? r.json() : Promise.reject(new Error(`아파트 실거래 자료 실패 (${r.status})`))))
-    .then(j => { apts = j; aptTrades = j.c.map(() => []); for (const t of j.t) aptTrades[t[0]].push(t); return j; })
+    .then(j => {
+      apts = j; aptTrades = j.c.map(() => []); aptRents = j.c.map(() => []);
+      for (const t of j.t) aptTrades[t[0]].push(t);
+      for (const t of j.r || []) aptRents[t[0]].push(t);
+      return j;
+    })
     .catch(e => { aptsLoading = null; throw e; });
   return aptsLoading;
+}
+const ymdAgo = d => +new Date(Date.now() - d * 864e5).toLocaleDateString('sv-SE').slice(2).replace(/-/g, '');
+// 한 평형의 매매·전세 요약. 전세가율 = 최근 6개월 전세 중위 ÷ 최근 6개월 매매 중위(없으면 최근 거래가)
+function aptStats(i, area) {
+  const rows = aptTrades[i].filter(t => areaOf(t) === area);
+  const rents = aptRents[i].filter(t => areaOf(t) === area);
+  const last = rows[0];
+  const recent = median(rows.filter(t => t[1] >= ymdAgo(90)).map(t => t[3]));
+  const before = median(rows.filter(t => t[1] >= ymdAgo(455) && t[1] < ymdAgo(365)).map(t => t[3]));
+  const sale = median(rows.filter(t => t[1] >= ymdAgo(180)).map(t => t[3])) ?? last?.[3] ?? null;
+  const r6 = rents.filter(t => t[1] >= ymdAgo(180));
+  const jeonse = median((r6.length >= 2 ? r6 : rents).map(t => t[3]));
+  return {
+    rows, rents, last, sale, jeonse,
+    chg: recent && before ? (recent / before - 1) * 100 : null,
+    ratio: sale && jeonse ? jeonse / sale * 100 : null,
+    gap: sale && jeonse ? sale - jeonse : null,
+  };
+}
+
+// 새 거래 배지: 장소마다 마지막으로 본 최신 거래일을 기억. 처음 받을 때는 지금 것을 기준으로 삼아 전부 '새 거래'가 되지 않게
+let seen = store.get('seen', {});
+const latestTradeOf = n => { const m = matchComplex(n); return m ? aptTrades[m.i][0][1] : 0; };
+const hasNewTrade = n => n.path in seen && latestTradeOf(n) > seen[n.path];
+function baselineSeen() {
+  let changed = false;
+  for (const n of places()) {
+    const d = latestTradeOf(n);
+    if (d && !(n.path in seen)) { seen[n.path] = d; changed = true; }
+  }
+  if (changed) store.set('seen', seen);
 }
 const normApt = s => String(s || '').replace(/\(.*?\)|아파트|단지|\s|·/g, '').replace(/제(?=\d)/g, '');
 function commonLen(a, b) { // 가장 긴 공통 부분 문자열 길이
@@ -1055,23 +1103,23 @@ async function fillApt(n) {
   if (!m) { box.innerHTML = '<p class="hint">이 근처에서 이름이 맞는 아파트 실거래를 못 찾았습니다 (수집 범위: 관악·동작·영등포·구로·광진·중랑·금천·노원·도봉·강북·은평·동대문·서초)</p>'; return; }
   const tr = aptTrades[m.i];
   const pa = pickArea(n, tr);
-  aptSel = { n, m, tr, area: pa.pick, areas: pa.areas.slice(0, 5), cnt: pa.cnt };
+  // 이번에 열기 전까지 본 최신 거래일 — 그 뒤 거래는 NEW 표시. 열었으니 기준을 최신으로 올리고 지도 배지를 지움
+  const seenBefore = seen[n.path] ?? tr[0][1];
+  aptSel = { n, m, tr, area: pa.pick, areas: pa.areas.slice(0, 5), cnt: pa.cnt, seenBefore };
+  if (n.isPlace && seen[n.path] !== tr[0][1]) {
+    const wasNew = hasNewTrade(n);
+    seen[n.path] = tr[0][1]; store.set('seen', seen);
+    if (wasNew) { drawMarkers(); drawList(); }
+  }
   renderApt();
 }
 function renderApt() {
-  const { n, m, tr, area, areas, cnt } = aptSel;
+  const { n, m, tr, area, areas, cnt, seenBefore } = aptSel;
   const box = $('#sheet-body .apt');
   if (!box) return;
   const c = m.c;
-  const rows = tr.filter(t => areaOf(t) === area);
-  const last = rows[0];
-  const yearAgo = +new Date(Date.now() - 365 * 864e5).toLocaleDateString('sv-SE').slice(2).replace(/-/g, '');
-  const y1 = rows.filter(t => t[1] >= yearAgo).map(t => t[3]);
-  // 최근 3개월 중위 vs 1년 전 같은 3개월 중위
-  const ago = d => +new Date(Date.now() - d * 864e5).toLocaleDateString('sv-SE').slice(2).replace(/-/g, '');
-  const recent = median(rows.filter(t => t[1] >= ago(90)).map(t => t[3]));
-  const before = median(rows.filter(t => t[1] >= ago(455) && t[1] < ago(365)).map(t => t[3]));
-  const chg = recent && before ? (recent / before - 1) * 100 : null;
+  const { rows, rents, last, chg, jeonse, ratio, gap } = aptStats(m.i, area);
+  const y1 = rows.filter(t => t[1] >= ymdAgo(365)).map(t => t[3]);
   const naver = c[5] ? `https://new.land.naver.com/complexes/${c[5]}` : `https://m.land.naver.com/search/result/${encodeURIComponent(c[1])}`;
   box.innerHTML = `<div class="villa-top"><span class="k">아파트 실거래</span><b>${esc(c[1])}</b><span class="sub">${c[2] ? `${c[2]}년 준공 · ` : ''}${m.sim < 0.5 ? `이름이 달라 가장 가까운 단지(${Math.round(m.d * 1000)}m)로 연결 · ` : ''}최근 ${apts.months}개월 ${tr.length}건</span></div>
     <div class="vtools">${areas.map(a => `<button class="vchip${a === area ? ' on' : ''}" data-act="apt-area" data-v="${a}">${a}㎡ <span>${cnt[a]}</span></button>`).join('')}</div>
@@ -1079,20 +1127,28 @@ function renderApt() {
       <div class="stat"><span class="k">최근 거래</span><b>${last ? won(last[3]) : '—'}</b></div>
       <div class="stat"><span class="k">1년 최고 / 최저</span><b>${y1.length ? `${won(Math.max(...y1))} / ${won(Math.min(...y1))}` : '—'}</b></div>
       <div class="stat"><span class="k">1년 전 대비</span><b class="${chg == null ? '' : chg >= 0 ? 'up' : 'down'}">${chg == null ? '—' : `${chg >= 0 ? '▲' : '▼'} ${Math.abs(chg).toFixed(1)}%`}</b></div></div>
-    ${aptChart(rows)}
-    <div class="vlist">${rows.slice(0, 6).map(t => `<div class="vrow"><span class="d">${ymdOf(t[1]).slice(2).replace(/-/g, '.')}</span>
-      <span class="t">${(t[2] / 10).toFixed(2)}㎡ · ${t[4] ?? '—'}층</span><span class="v">${won(t[3])}</span></div>`).join('')}</div>
+    <div class="stats jeonse">
+      <div class="stat"><span class="k">전세 중위 (${rents.length}건)</span><b>${jeonse ? won(jeonse) : '—'}</b></div>
+      <div class="stat"><span class="k">전세가율</span><b class="${ratio >= 70 ? 'up' : ''}">${ratio ? `${ratio.toFixed(0)}%` : '—'}</b></div>
+      <div class="stat"><span class="k">갭 (매매−전세)</span><b>${gap != null ? won(gap) : '—'}</b></div></div>
+    ${aptChart(rows, rents)}
+    <div class="vlist">${rows.slice(0, 6).map(t => `<div class="vrow"><span class="d">${ymdOf(t[1]).slice(2).replace(/-/g, '.')}${t[1] > seenBefore ? '<i class="nb">NEW</i>' : ''}</span>
+      <span class="t">${(t[2] / 10).toFixed(2)}㎡ · ${t[4] ?? '—'}층</span><span class="v">${won(t[3])}</span></div>`).join('')}
+      ${rents.slice(0, 3).map(t => `<div class="vrow rent"><span class="d">${ymdOf(t[1]).slice(2).replace(/-/g, '.')}</span>
+      <span class="t">전세 · ${(t[2] / 10).toFixed(2)}㎡</span><span class="v">${won(t[3])}</span></div>`).join('')}</div>
     <div class="row"><a class="btn sm" href="${naver}" target="_blank" rel="noopener">네이버 매물 보기</a>
       ${last && n.isPlace ? `<button class="btn sm" data-act="apt-save">노트 시세를 ${won(last[3])}(${area}㎡)로 갱신</button>` : ''}</div>
-    <div class="sub">출처: 서울부동산정보광장 · ${esc(apts.updated)} 갱신 · 해제 거래 제외</div>`;
+    <div class="sub">출처: 서울부동산정보광장 · ${esc(apts.updated)} 갱신 · 해제 거래 제외 · 전세는 최근 12개월 신규 계약(갱신 제외), 전세가율은 최근 6개월 중위끼리</div>`;
 }
-// 거래 점 + 월별 중위선 (SVG)
-function aptChart(rows) {
+// 거래 점 + 월별 중위선 + 전세 점 (SVG)
+function aptChart(rows, rents = []) {
   if (rows.length < 2) return '';
   const W = 320, H = 130, P = { l: 34, r: 6, t: 8, b: 18 };
-  const pts = rows.map(t => ({ x: new Date(ymdOf(t[1])).getTime(), y: t[3] / 10000 }));
+  const pt = t => ({ x: new Date(ymdOf(t[1])).getTime(), y: t[3] / 10000 });
+  const pts = rows.map(pt), rpts = rents.map(pt);
   const x0 = Date.now() - apts.months * 30.4 * 864e5, x1 = Date.now();
-  let y0 = Math.min(...pts.map(p => p.y)), y1 = Math.max(...pts.map(p => p.y));
+  const ys = [...pts, ...rpts].map(p => p.y);
+  let y0 = Math.min(...ys), y1 = Math.max(...ys);
   if (y1 - y0 < 0.5) { y0 -= 0.25; y1 += 0.25; }
   const pad = (y1 - y0) * 0.1; y0 -= pad; y1 += pad;
   const X = x => P.l + (x - x0) / (x1 - x0) * (W - P.l - P.r);
@@ -1105,9 +1161,10 @@ function aptChart(rows) {
   return `<svg class="achart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="실거래가 추이">
     ${ticks.map(t => `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(t)}" y2="${Y(t)}" class="grid"/><text x="${P.l - 4}" y="${Y(t) + 3}" class="ax" text-anchor="end">${t.toFixed(1)}</text>`).join('')}
     ${years.map(y => `<text x="${X(new Date(`${y}-01-01`).getTime())}" y="${H - 4}" class="ax" text-anchor="middle">${String(y).slice(2)}년</text>`).join('')}
+    ${rpts.map(p => `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="2" class="rdot"/>`).join('')}
     ${pts.map(p => `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="2.2" class="dot"/>`).join('')}
     ${line.length > 1 ? `<polyline points="${line.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}" class="med"/>` : ''}
-  </svg><div class="sub">점: 거래 · 선: 월별 중위 (억)</div>`;
+  </svg><div class="sub">파란 점: 매매 · 주황 선: 매매 월별 중위${rpts.length ? ' · 초록 점: 전세' : ''} (억)</div>`;
 }
 
 // ---------- 로드뷰 (카카오) ----------
@@ -1125,6 +1182,168 @@ function openRoadview(n) {
   });
 }
 $('#roadview-close').onclick = () => { $('#roadview').hidden = true; $('#roadview-view').innerHTML = ''; };
+
+// ---------- 주변 시설 (카카오 장소 검색: 역·학교·학원·어린이집·병원·마트·편의점) ----------
+const fmtDist = m => (m >= 1000 ? `${(m / 1000).toFixed(1)}km` : `${Math.round(m)}m`);
+const walkMin = m => Math.max(1, Math.round(m * 1.3 / 67)); // 직선거리 × 1.3, 분속 67m
+const nearCache = new Map();
+function nearbyOf(n) {
+  const svc = window.kakao?.maps?.services;
+  if (!svc || !n.ll) return Promise.resolve(null);
+  const key = String(n.ll);
+  if (nearCache.has(key)) return nearCache.get(key);
+  const ps = new svc.Places();
+  const opt = radius => ({ location: LL(n.ll), radius, sort: svc.SortBy.DISTANCE });
+  const cat = (code, radius) => new Promise(r => ps.categorySearch(code,
+    (res, st, pg) => r(st === svc.Status.OK ? { list: res, total: pg.totalCount } : { list: [], total: 0 }), opt(radius)));
+  const school = (q, re) => new Promise(r => ps.keywordSearch(q,
+    (res, st) => r(st === svc.Status.OK ? res.find(p => re.test(p.place_name)) : null), { ...opt(2000), category_group_code: 'SC4' }));
+  const p = Promise.all([cat('SW8', 1500), school('초등학교', /초등학교$/), school('중학교', /중학교$/), school('고등학교', /고등학교$/),
+    cat('AC5', 500), cat('PS3', 500), cat('HP8', 500), cat('MT1', 2000), cat('CS2', 300)])
+    .then(([sw, e, m, h, ac, kid, hp, mt, cs]) => ({ sw: sw.list.slice(0, 3), e, m, h, mt: mt.list[0], ac: ac.total, kid: kid.total, hp: hp.total, cs: cs.total }));
+  p.catch(() => nearCache.delete(key));
+  nearCache.set(key, p);
+  return p;
+}
+async function fillNearby(n) {
+  const box = $('#sheet-body .near');
+  if (!box) return;
+  const r = await nearbyOf(n).catch(() => null);
+  if (currentNote() !== n) return;
+  if (!r) { box.remove(); return; }
+  const row = (p, label) => (p ? `<div class="nr"><span class="k">${label}</span><b>${esc(p.place_name)}</b><span class="d">${fmtDist(+p.distance)} · 도보 ${walkMin(+p.distance)}분</span></div>` : '');
+  const st = r.sw[0];
+  const cnt = x => (x >= 45 ? '45+' : x); // 카카오 검색은 45건까지만 셈
+  box.innerHTML = `<div class="villa-top"><span class="k">주변</span><b>${st ? `${esc(st.place_name)} 도보 ${walkMin(+st.distance)}분` : '1.5km 안에 지하철역 없음'}</b></div>
+    <div class="nlist">${r.sw.map(p => row(p, '🚇 역')).join('')}${row(r.e, '🏫 초등')}${row(r.m, '🏫 중학')}${row(r.h, '🏫 고교')}${row(r.mt, '🛒 마트')}</div>
+    <div class="ncounts"><span>📚 학원 <b>${cnt(r.ac)}</b></span><span>🧸 어린이집 <b>${cnt(r.kid)}</b></span><span>🏥 병원 <b>${cnt(r.hp)}</b></span><span>🏪 편의점 <b>${cnt(r.cs)}</b> <small>(300m)</small></span></div>
+    <div class="row"><button class="btn sm" data-act="near-map">지도에 표시</button></div>
+    <div class="sub">카카오 장소 검색 · 학원·어린이집·병원은 500m 안 개수 · 거리는 직선, 도보 시간은 직선×1.3으로 어림</div>`;
+}
+const nearObjs = [];
+async function showNearOnMap(n) {
+  if (!map) return;
+  clear(nearObjs);
+  const r = await nearbyOf(n);
+  if (!r) return;
+  const items = [...r.sw.map(p => ['🚇', p]), ['🏫', r.e], ['🏫', r.m], ['🏫', r.h], ['🛒', r.mt]].filter(x => x[1]);
+  for (const [ic, p] of items) nearObjs.push(overlay([+p.y, +p.x], `<div class="near-pin">${ic}<span>${esc(p.place_name)}</span></div>`, { z: 5 }));
+  const sheetUp = window.innerWidth < 900;
+  fitTo([n.ll, ...items.map(([, p]) => [+p.y, +p.x])], [70, sheetUp ? 30 : 470, sheetUp ? mapEl.clientHeight * 0.55 : 30, 30], 3);
+}
+
+// ---------- 거리 재기 · 지형도 (지도 오른쪽 아래 버튼) ----------
+let measure = null; // { pts: [[lat,lng]], objs: [] }
+function setMeasure(on) {
+  if (measure) clear(measure.objs);
+  measure = on ? { pts: [], objs: [] } : null;
+  $('#mt-measure').classList.toggle('on', on);
+  $('#measurebar').hidden = !on;
+  document.body.classList.toggle('measuring', on);
+  if (on) { togglePanel(null); drawMeasure(); }
+}
+function drawMeasure() {
+  clear(measure.objs);
+  const { pts, objs } = measure;
+  let total = 0;
+  if (pts.length > 1) {
+    const line = new K.Polyline({ map, path: pts.map(LL), strokeColor: '#d93025', strokeWeight: 4, strokeOpacity: 0.9 });
+    total = line.getLength();
+    objs.push(line);
+  }
+  pts.forEach((ll, i) => objs.push(overlay(ll, `<div class="m-dot${i === pts.length - 1 ? ' last' : ''}"></div>`, { z: 6 })));
+  if (pts.length > 1) objs.push(overlay(pts[pts.length - 1], `<div class="m-lbl">${fmtDist(total)}</div>`, { y: 1.6, z: 7 }));
+  $('#measure-text').innerHTML = pts.length < 2 ? '지도를 눌러 지점을 찍으세요'
+    : `<b>${fmtDist(total)}</b> · 도보 약 ${Math.max(1, Math.round(total / 67))}분 · 자전거 ${Math.max(1, Math.round(total / 250))}분`;
+  $('#measure-undo').disabled = !pts.length;
+}
+$('#mt-measure').onclick = () => setMeasure(!measure);
+$('#measure-close').onclick = () => setMeasure(false);
+$('#measure-undo').onclick = () => { measure.pts.pop(); drawMeasure(); };
+
+let terrainOn = store.get('terrainOn', false);
+function setTerrain(on) {
+  terrainOn = on;
+  store.set('terrainOn', on);
+  $('#mt-terrain').classList.toggle('on', on);
+  if (!map) return;
+  if (on) map.addOverlayMapTypeId(K.MapTypeId.TERRAIN);
+  else map.removeOverlayMapTypeId(K.MapTypeId.TERRAIN);
+}
+$('#mt-terrain').onclick = () => { setTerrain(!terrainOn); setStatus(terrainOn ? '지형도 켬 — 언덕·경사가 음영으로 보여요' : '지형도 끔'); };
+if (!map) $('#maptools').hidden = true;
+
+// ---------- 단지 비교 (최대 4곳, 이 폰에 저장) ----------
+let compareList = store.get('compare', []);
+const COMPARE_MAX = 4;
+function syncCompare() {
+  compareList = compareList.filter(nm => !notes.length || byName.get(nm));
+  store.set('compare', compareList);
+  $('#comparechip').hidden = !compareList.length;
+  $('#comparechip').textContent = `⚖️ 비교 ${compareList.length}`;
+  placeAdd();
+}
+function toggleCompare(n) {
+  if (compareList.includes(n.name)) compareList = compareList.filter(x => x !== n.name);
+  else if (compareList.length >= COMPARE_MAX) { setStatus(`비교는 ${COMPARE_MAX}곳까지 — 왼쪽 아래 ⚖️에서 하나 빼고 담으세요`, true); return; }
+  else { compareList.push(n.name); setStatus(`비교에 담음 (${compareList.length}곳) — 왼쪽 아래 ⚖️ 비교`); }
+  syncCompare();
+}
+async function drawCompare() {
+  const list = compareList.map(nm => byName.get(nm)).filter(Boolean);
+  const body = $('#compare-body');
+  if (!list.length) { body.innerHTML = '<p class="hint">장소 상세의 ⚖️ 비교 담기로 추가하세요 (최대 4곳)</p>'; return; }
+  try { await loadApts(); } catch {}
+  const cols = list.map(n => {
+    const zs = n.ll ? zonesAt(n.ll) : [];
+    const z = zs.find(x => x.properties.s && zoneState(x) === 'active') || zs.find(x => x.properties.s);
+    const m = apts && matchComplex(n);
+    const area = m && pickArea(n, aptTrades[m.i]).pick;
+    return { n, z, m, area, s: m ? aptStats(m.i, area) : null };
+  });
+  // 줄마다 [제목, 값 HTML, 비교용 숫자, 유리한 쪽(low/high) — 초록 강조]
+  const rows = [
+    ['유형 · 지역', c => esc([c.n.fm.유형, c.n.region].filter(Boolean).join(' · '))],
+    ['상태 · 평가', c => esc([c.n.fm.상태, c.n.rating].filter(Boolean).join(' · '))],
+    ['노트 시세', c => (c.n.fm.시세 ? `${esc(c.n.fm.시세)}억${c.n.fm.시세평형 ? ` <small>${esc(c.n.fm.시세평형)}</small>` : ''}` : '—'), c => parseFloat(c.n.fm.시세), 'low'],
+    ['최근 실거래', c => (c.s?.last ? `${won(c.s.last[3])} <small>${c.area}㎡ · ${ymdOf(c.s.last[1]).slice(2).replace(/-/g, '.')}</small>` : '—'), c => c.s?.last?.[3], 'low'],
+    ['1년 전 대비', c => (c.s?.chg != null ? `<span class="${c.s.chg >= 0 ? 'up' : 'down'}">${c.s.chg >= 0 ? '▲' : '▼'} ${Math.abs(c.s.chg).toFixed(1)}%</span>` : '—')],
+    ['전세 중위', c => (c.s?.jeonse ? won(c.s.jeonse) : '—')],
+    ['전세가율', c => (c.s?.ratio ? `${c.s.ratio.toFixed(0)}%` : '—'), c => c.s?.ratio, 'high'],
+    ['갭', c => (c.s?.gap != null ? won(c.s.gap) : '—'), c => c.s?.gap, 'low'],
+    ['준공', c => esc(c.n.fm.준공 || c.m?.c[2] || '—'), c => +(c.n.fm.준공 || c.m?.c[2]) || null, 'low'],
+    ['세대', c => (c.n.fm.세대 ? Number(c.n.fm.세대).toLocaleString() : '—'), c => +c.n.fm.세대 || null, 'high'],
+    ['정비 단계', c => (c.z ? esc(zoneStage(c.z)) : '—')],
+    ['가까운 역', c => `<span data-near="${esc(c.n.name)}" data-k="sw">…</span>`],
+    ['초등학교', c => `<span data-near="${esc(c.n.name)}" data-k="e">…</span>`],
+  ];
+  const best = (num, dir) => {
+    if (!num) return null;
+    const v = cols.map(num).map(x => (Number.isFinite(x) ? x : null));
+    const ok = v.filter(x => x != null);
+    if (ok.length < 2) return null;
+    const target = dir === 'low' ? Math.min(...ok) : Math.max(...ok);
+    return v.map(x => x === target);
+  };
+  body.innerHTML = `<div class="cmp-wrap"><table class="cmp"><thead><tr><th></th>${cols.map(c => `<th><a href="#" data-note="${esc(c.n.name)}">${esc(c.n.name)}</a>
+      <button class="cmp-x" data-cmp-del="${esc(c.n.name)}" title="빼기">✕</button></th>`).join('')}</tr></thead>
+    <tbody>${rows.map(([k, fn, num, dir]) => { const b = best(num, dir); return `<tr><th>${k}</th>${cols.map((c, i) => `<td${b?.[i] ? ' class="best"' : ''}>${fn(c)}</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>
+    <p class="hint">초록 칸: 그 줄에서 유리한 쪽(시세·갭·준공은 낮을수록, 전세가율·세대는 높을수록). 실거래는 노트의 시세평형에 가장 가까운 평형 기준.</p>
+    <div class="row"><button class="btn sm" data-cmp-clear>모두 비우기</button></div>`;
+  for (const c of cols) nearbyOf(c.n).then(r => {
+    const put = (k, html) => { const el = body.querySelector(`[data-near="${CSS.escape(c.n.name)}"][data-k="${k}"]`); if (el) el.innerHTML = html; };
+    put('sw', r?.sw[0] ? `${esc(r.sw[0].place_name)} <small>도보 ${walkMin(+r.sw[0].distance)}분</small>` : '—');
+    put('e', r?.e ? `${esc(r.e.place_name)} <small>${fmtDist(+r.e.distance)}</small>` : '—');
+  }).catch(() => {});
+}
+$('#comparechip').onclick = () => { togglePanel('compare'); if (!$('#panel-compare').hidden) drawCompare(); };
+$('#compare-body').onclick = e => {
+  const del = e.target.closest('[data-cmp-del]');
+  if (del) { compareList = compareList.filter(x => x !== del.dataset.cmpDel); syncCompare(); drawCompare(); return; }
+  if (e.target.closest('[data-cmp-clear]')) { compareList = []; syncCompare(); togglePanel(null); return; }
+  const a = e.target.closest('[data-note]');
+  if (a) { e.preventDefault(); if (window.innerWidth < 900) togglePanel(null); nav(a.dataset.note); }
+};
 
 // ---------- 재개발·재건축 수익 계산기 ----------
 // 권리가액 = 감정가 × 비례율, 프리미엄 = 매입가 − 권리가액, 분담금 = 조합원 분양가 − 권리가액(음수면 환급)
@@ -1237,6 +1456,7 @@ function showNote(name, doFocus = true) {
     n.ll && tile('🎯', '지도에서', { 'data-act': 'focus' }),
     n.ll && K && tile('🛣️', '로드뷰', { 'data-act': 'roadview' }),
     n.isPlace && /재개발|재건축/.test(f.유형 || '') && tile('🧮', '수익 계산', { 'data-act': 'calc' }),
+    n.isPlace && tile('⚖️', compareList.includes(n.name) ? '비교에서 빼기' : '비교 담기', { 'data-act': 'compare' }),
     n.isPlace && tile('🗺️', '카카오맵', ext(`https://map.kakao.com/link/search/${encodeURIComponent(f.주소 ? String(f.주소).replace(/\s*\(.*\)$/, '') : n.name)}`)),
     n.isPlace && tile('🏠', '네이버부동산', ext(`https://m.land.naver.com/search/result/${q}`)),
     n.isPlace && (f.주소 || n.ll) && tile('📜', '토지이음', { ...ext(EUM_HOME), 'data-act': 'eum' }),
@@ -1267,6 +1487,7 @@ function showNote(name, doFocus = true) {
     ${stageZone ? stageHtml(stageZone) : ''}
     ${n.isPlace && n.ll && (f.유형 === '재개발구역' || stageZone) ? '<div class="villa card"><p class="hint">빌라 실거래 불러오는 중…</p></div>' : ''}
     ${n.isPlace && n.ll && /아파트|재건축|도시형|미확인/.test(f.유형 || '') ? '<div class="apt card"><p class="hint">아파트 실거래 불러오는 중…</p></div>' : ''}
+    ${n.isPlace && n.ll && K ? '<div class="near card"><p class="hint">주변 시설 찾는 중…</p></div>' : ''}
     ${f.주소 ? `<div class="addr card"><span class="ic">📍</span><span class="t">${esc(f.주소)}</span><button class="copy" data-act="copy-addr" title="주소 복사">복사</button></div>` : ''}
     ${inZones.length ? `<div class="zones-in">${inZones.map(z => `<div class="zp"><i style="background:${ZONE_COLOR[z.properties.k]}"></i>${esc(zoneLabel(z))}</div>`).join('')}</div>` : ''}
     ${acts.length ? `<div class="tiles">${acts.join('')}</div>` : ''}
@@ -1280,6 +1501,7 @@ function showNote(name, doFocus = true) {
   loadAtts();
   fillVillas(n);
   fillApt(n);
+  fillNearby(n);
   if (n.isPlace) pnuOf(n).then(pnu => {
     const a = $('#sheet-body [data-act="eum"]');
     if (a && pnu && currentNote() === n) { a.href = EUM_LAND(pnu); a.title = `토지이용계획 (PNU ${pnu})`; }
@@ -1431,6 +1653,8 @@ $('#sheet-body').onclick = async e => {
   if (act === 'pick') startPick(n);
   if (act === 'walk') walkTo(n);
   if (act === 'roadview') openRoadview(n);
+  if (act === 'near-map') showNearOnMap(n);
+  if (act === 'compare') { toggleCompare(n); showNote(n.name, false); }
   if (act === 'apt-area') { aptSel.area = +e.target.closest('[data-v]').dataset.v; renderApt(); }
   if (act === 'apt-save') {
     const last = aptSel.tr.find(t => areaOf(t) === aptSel.area);
@@ -1526,7 +1750,7 @@ let newLL = null;
 // 카카오맵은 길게 누르기 이벤트가 없어서 직접 잰다. PC는 우클릭(contextmenu).
 let longPressAt = 0;
 function longPress(clientX, clientY) {
-  if (Date.now() - longPressAt < 1000) return;
+  if (measure || Date.now() - longPressAt < 1000) return;
   longPressAt = Date.now();
   const r = mapEl.getBoundingClientRect();
   openNew(llOf(map.getProjection().coordsFromContainerPoint(new K.Point(clientX - r.left, clientY - r.top))));
@@ -1840,6 +2064,7 @@ function render(info, doRoute = true) {
   for (const n of notes) byName.set(n.name, n);
   routes = parseRoutes();
   syncToday();
+  syncCompare();
   refresh();
   drawRoute();
   drawInfo();
@@ -1892,7 +2117,7 @@ async function load() {
   } finally {
     hideSplash();
     // 지도 라벨에 최근 실거래가를 붙이려고 조용히 받아 둠 (서비스워커가 캐시)
-    setTimeout(() => loadApts().then(() => { matchCache.clear(); drawMarkers(); }).catch(() => {}), 1500);
+    setTimeout(() => loadApts().then(() => { matchCache.clear(); baselineSeen(); drawMarkers(); drawList(); }).catch(() => {}), 1500);
   }
 }
 
@@ -1958,3 +2183,5 @@ load().then(() => {
 });
 if (zonesOn) setZones(true);
 if (districtOn) setDistrict(true);
+if (terrainOn) setTerrain(true);
+syncCompare();
