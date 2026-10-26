@@ -381,3 +381,43 @@ a.btn { color: inherit; text-decoration: none; display: inline-flex; align-items
 .vchip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .vchip.on span { color: #fff; opacity: .85; }
 .vchip.sort { margin-left: auto; }
+/* 로드뷰 */
+#roadview { position: fixed; inset: 0; z-index: 3000; background: #000; display: flex; flex-direction: column; }
+#roadview .rv-head { display: flex; align-items: center; gap: 8px; padding: calc(8px + env(safe-area-inset-top)) 12px 8px; background: var(--bar); color: var(--bar-fg); }
+#roadview .rv-head b { flex: 1; font-size: 15px; }
+#roadview-view { flex: 1; }
+
+/* 수익 계산기 */
+.calc-top { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.calc-top .sub { font-size: 11px; color: var(--muted); }
+.calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.calc-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.calc-grid .u { display: none; }
+.calc-grid input { padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--fg); font-size: 15px; font-weight: 600; }
+.calc-grid input::placeholder { font-size: 10.5px; font-weight: 400; }
+.calc-out { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 12px 0 8px; }
+.calc-out .hint { grid-column: 1 / -1; margin: 4px 0 0; font-size: 11px; }
+.cl { background: var(--bg); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; }
+.cl span { font-size: 11px; color: var(--muted); font-weight: 600; }
+.cl b { font-size: 16px; font-weight: 800; }
+.cl small { font-size: 10px; color: var(--muted); }
+.cl.big { grid-column: 1 / -1; }
+.cl.big b { font-size: 22px; }
+.cl.warn b { color: #b45309; }
+.cl.good b { color: #188038; }
+.cl.bad b { color: #d93025; }
+
+/* 아파트 실거래 */
+.lbl .lp { color: #b45309; font-weight: 800; margin-left: 2px; }
+.achart { width: 100%; height: 130px; display: block; margin: 8px 0 2px; }
+.achart .grid { stroke: var(--card-line); stroke-width: 1; }
+.achart .ax { fill: var(--muted); font-size: 9px; }
+.achart .dot { fill: var(--accent); opacity: .35; }
+.achart .med { fill: none; stroke: #f29900; stroke-width: 2.2; stroke-linejoin: round; }
+.apt > .sub, .apt .achart + .sub { font-size: 11px; color: var(--muted); }
+.stat b.up { color: #d93025; }
+.stat b.down { color: #1a73e8; }
+.apt .row { gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.apt .vrow { cursor: default; }
+
+#roadview-close { background: rgba(255, 255, 255, .18); color: #fff; border: 0; font-size: 16px; min-width: 40px; }

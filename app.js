@@ -390,7 +390,7 @@ function drawMarkers() {
   for (const n of shown) {
     if (!n.ll) continue;
     const el = Object.assign(document.createElement('div'), {
-      className: 'pin-wrap', innerHTML: `${pinHtml(n)}<span class="lbl">${esc(n.name)}</span>`,
+      className: 'pin-wrap', innerHTML: `${pinHtml(n)}<span class="lbl">${esc(n.name)}${priceTag(n)}</span>`,
     });
     el.onclick = () => nav(n.name);
     markerObjs.push(overlay(n.ll, el, { z: { '1순위': 3, '추천': 2, '후보': 1 }[n.rating] || 0, clickable: true }));
@@ -982,6 +982,224 @@ function villaRow(t, i) {
     <span class="v">${won(price)}${land ? `<small>대지평 ${won(price / (land / PY))}</small>` : ''}</span></button>`;
 }
 
+// ---------- 아파트 실거래 (apts.json: 서울부동산정보광장, 매일 자동 갱신) ----------
+// c: [pnu, 이름, 준공, lat, lng, 네이버코드] · t: [단지번호, YYMMDD, 전용×10, 금액(만원), 층] (최신순)
+let apts = null, aptsLoading = null, aptTrades = null;
+function loadApts() {
+  aptsLoading ||= fetch('apts.json').then(r => (r.ok ? r.json() : Promise.reject(new Error(`아파트 실거래 자료 실패 (${r.status})`))))
+    .then(j => { apts = j; aptTrades = j.c.map(() => []); for (const t of j.t) aptTrades[t[0]].push(t); return j; })
+    .catch(e => { aptsLoading = null; throw e; });
+  return aptsLoading;
+}
+const normApt = s => String(s || '').replace(/\(.*?\)|아파트|단지|\s|·/g, '').replace(/제(?=\d)/g, '');
+function commonLen(a, b) { // 가장 긴 공통 부분 문자열 길이
+  let best = 0;
+  for (let i = 0; i < a.length; i++) for (let j = 0; j < b.length; j++) {
+    let k = 0; while (a[i + k] && a[i + k] === b[j + k]) k++;
+    if (k > best) best = k;
+  }
+  return best;
+}
+const matchCache = new Map();
+function matchComplex(n) {
+  if (!apts || !n.ll) return null;
+  const key = `${n.name}|${n.ll}`;
+  if (matchCache.has(key)) return matchCache.get(key);
+  const nm = normApt(n.name);
+  let best = null;
+  apts.c.forEach((c, i) => {
+    const d = distKm(n.ll, [c[3], c[4]]);
+    if (d > 0.35) return;
+    const cn = normApt(c[1]);
+    const sim = commonLen(nm, cn) / Math.max(2, Math.min(nm.length, cn.length));
+    const score = sim * 2 - d * 3;
+    if (!best || score > best.score) best = { i, c, d, sim, score };
+  });
+  const m = best && (best.sim >= 0.5 || best.d < 0.08) && aptTrades[best.i].length ? best : null;
+  matchCache.set(key, m);
+  return m;
+}
+const areaOf = t => Math.round(t[2] / 10); // ㎡ 정수
+const ymdOf = v => { const s = String(v).padStart(6, '0'); return `20${s.slice(0, 2)}-${s.slice(2, 4)}-${s.slice(4, 6)}`; };
+// 노트의 시세평형(예: 59㎡, 18평)에 가장 가까운 평형, 없으면 거래가 가장 많은 평형
+function pickArea(n, trades) {
+  const cnt = {};
+  for (const t of trades) cnt[areaOf(t)] = (cnt[areaOf(t)] || 0) + 1;
+  const areas = Object.keys(cnt).map(Number);
+  const w = String(n.fm.시세평형 || '');
+  const sq = parseFloat(w.match(/(\d+(?:\.\d+)?)\s*㎡/)?.[1]) || (parseFloat(w.match(/(\d+)\s*평/)?.[1]) * PY * 0.76) || null; // 공급평 → 전용 대략
+  const top = areas.sort((a, b) => cnt[b] - cnt[a]);
+  return { cnt, areas: top, pick: sq ? [...areas].sort((a, b) => Math.abs(a - sq) - Math.abs(b - sq))[0] : top[0] };
+}
+// 지도 라벨에 최근 실거래가 (아파트·재건축만, apts.json을 받은 뒤)
+function priceTag(n) {
+  if (!apts || !n.isPlace || !/아파트|재건축|도시형|미확인/.test(n.fm.유형 || '')) return '';
+  const t = latestFor(n);
+  return t ? ` <b class="lp">${won(t[3])}</b>` : '';
+}
+function latestFor(n) {
+  const m = matchComplex(n);
+  if (!m) return null;
+  const tr = aptTrades[m.i];
+  const { pick } = pickArea(n, tr);
+  return tr.find(t => areaOf(t) === pick) || tr[0];
+}
+
+let aptSel = null;
+async function fillApt(n) {
+  const box = $('#sheet-body .apt');
+  if (!box) return;
+  try { await loadApts(); } catch (e) { box.innerHTML = `<p class="hint err">${esc(e.message)}</p>`; return; }
+  if (currentNote() !== n) return;
+  const m = matchComplex(n);
+  if (!m) { box.innerHTML = '<p class="hint">이 근처에서 이름이 맞는 아파트 실거래를 못 찾았습니다 (수집 범위: 관악·동작·영등포·구로·광진·중랑·금천·노원·도봉·강북·은평·동대문·서초)</p>'; return; }
+  const tr = aptTrades[m.i];
+  const pa = pickArea(n, tr);
+  aptSel = { n, m, tr, area: pa.pick, areas: pa.areas.slice(0, 5), cnt: pa.cnt };
+  renderApt();
+}
+function renderApt() {
+  const { n, m, tr, area, areas, cnt } = aptSel;
+  const box = $('#sheet-body .apt');
+  if (!box) return;
+  const c = m.c;
+  const rows = tr.filter(t => areaOf(t) === area);
+  const last = rows[0];
+  const yearAgo = +new Date(Date.now() - 365 * 864e5).toLocaleDateString('sv-SE').slice(2).replace(/-/g, '');
+  const y1 = rows.filter(t => t[1] >= yearAgo).map(t => t[3]);
+  // 최근 3개월 중위 vs 1년 전 같은 3개월 중위
+  const ago = d => +new Date(Date.now() - d * 864e5).toLocaleDateString('sv-SE').slice(2).replace(/-/g, '');
+  const recent = median(rows.filter(t => t[1] >= ago(90)).map(t => t[3]));
+  const before = median(rows.filter(t => t[1] >= ago(455) && t[1] < ago(365)).map(t => t[3]));
+  const chg = recent && before ? (recent / before - 1) * 100 : null;
+  const naver = c[5] ? `https://new.land.naver.com/complexes/${c[5]}` : `https://m.land.naver.com/search/result/${encodeURIComponent(c[1])}`;
+  box.innerHTML = `<div class="villa-top"><span class="k">아파트 실거래</span><b>${esc(c[1])}</b><span class="sub">${c[2] ? `${c[2]}년 준공 · ` : ''}${m.sim < 0.5 ? `이름이 달라 가장 가까운 단지(${Math.round(m.d * 1000)}m)로 연결 · ` : ''}최근 ${apts.months}개월 ${tr.length}건</span></div>
+    <div class="vtools">${areas.map(a => `<button class="vchip${a === area ? ' on' : ''}" data-act="apt-area" data-v="${a}">${a}㎡ <span>${cnt[a]}</span></button>`).join('')}</div>
+    <div class="stats">
+      <div class="stat"><span class="k">최근 거래</span><b>${last ? won(last[3]) : '—'}</b></div>
+      <div class="stat"><span class="k">1년 최고 / 최저</span><b>${y1.length ? `${won(Math.max(...y1))} / ${won(Math.min(...y1))}` : '—'}</b></div>
+      <div class="stat"><span class="k">1년 전 대비</span><b class="${chg == null ? '' : chg >= 0 ? 'up' : 'down'}">${chg == null ? '—' : `${chg >= 0 ? '▲' : '▼'} ${Math.abs(chg).toFixed(1)}%`}</b></div></div>
+    ${aptChart(rows)}
+    <div class="vlist">${rows.slice(0, 6).map(t => `<div class="vrow"><span class="d">${ymdOf(t[1]).slice(2).replace(/-/g, '.')}</span>
+      <span class="t">${(t[2] / 10).toFixed(2)}㎡ · ${t[4] ?? '—'}층</span><span class="v">${won(t[3])}</span></div>`).join('')}</div>
+    <div class="row"><a class="btn sm" href="${naver}" target="_blank" rel="noopener">네이버 매물 보기</a>
+      ${last && n.isPlace ? `<button class="btn sm" data-act="apt-save">노트 시세를 ${won(last[3])}(${area}㎡)로 갱신</button>` : ''}</div>
+    <div class="sub">출처: 서울부동산정보광장 · ${esc(apts.updated)} 갱신 · 해제 거래 제외</div>`;
+}
+// 거래 점 + 월별 중위선 (SVG)
+function aptChart(rows) {
+  if (rows.length < 2) return '';
+  const W = 320, H = 130, P = { l: 34, r: 6, t: 8, b: 18 };
+  const pts = rows.map(t => ({ x: new Date(ymdOf(t[1])).getTime(), y: t[3] / 10000 }));
+  const x0 = Date.now() - apts.months * 30.4 * 864e5, x1 = Date.now();
+  let y0 = Math.min(...pts.map(p => p.y)), y1 = Math.max(...pts.map(p => p.y));
+  if (y1 - y0 < 0.5) { y0 -= 0.25; y1 += 0.25; }
+  const pad = (y1 - y0) * 0.1; y0 -= pad; y1 += pad;
+  const X = x => P.l + (x - x0) / (x1 - x0) * (W - P.l - P.r);
+  const Y = y => P.t + (1 - (y - y0) / (y1 - y0)) * (H - P.t - P.b);
+  const months = {};
+  for (const p of pts) { const k = new Date(p.x).toISOString().slice(0, 7); (months[k] ||= []).push(p.y); }
+  const line = Object.keys(months).sort().map(k => [X(new Date(k + '-15').getTime()), Y(median(months[k]))]);
+  const ticks = [y0 + pad, (y0 + y1) / 2, y1 - pad];
+  const years = []; for (let y = new Date(x0).getFullYear() + 1; y <= new Date(x1).getFullYear(); y++) years.push(y);
+  return `<svg class="achart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="실거래가 추이">
+    ${ticks.map(t => `<line x1="${P.l}" x2="${W - P.r}" y1="${Y(t)}" y2="${Y(t)}" class="grid"/><text x="${P.l - 4}" y="${Y(t) + 3}" class="ax" text-anchor="end">${t.toFixed(1)}</text>`).join('')}
+    ${years.map(y => `<text x="${X(new Date(`${y}-01-01`).getTime())}" y="${H - 4}" class="ax" text-anchor="middle">${String(y).slice(2)}년</text>`).join('')}
+    ${pts.map(p => `<circle cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="2.2" class="dot"/>`).join('')}
+    ${line.length > 1 ? `<polyline points="${line.map(p => p.map(v => v.toFixed(1)).join(',')).join(' ')}" class="med"/>` : ''}
+  </svg><div class="sub">점: 거래 · 선: 월별 중위 (억)</div>`;
+}
+
+// ---------- 로드뷰 (카카오) ----------
+function openRoadview(n) {
+  const box = $('#roadview');
+  const client = new K.RoadviewClient();
+  setStatus('로드뷰 찾는 중…');
+  client.getNearestPanoId(LL(n.ll), 120, panoId => {
+    if (!panoId) { setStatus('근처(120m)에 로드뷰가 없습니다', true); return; }
+    setStatus(null);
+    box.hidden = false;
+    $('#roadview-title').textContent = `${n.name} 로드뷰`;
+    const rv = new K.Roadview($('#roadview-view'));
+    rv.setPanoId(panoId, LL(n.ll));
+  });
+}
+$('#roadview-close').onclick = () => { $('#roadview').hidden = true; $('#roadview-view').innerHTML = ''; };
+
+// ---------- 재개발·재건축 수익 계산기 ----------
+// 권리가액 = 감정가 × 비례율, 프리미엄 = 매입가 − 권리가액, 분담금 = 조합원 분양가 − 권리가액(음수면 환급)
+// 총 투자 = 매입가 + 분담금 + 기타 비용, 예상 차익 = 입주 시점 시세 − 총 투자. 입력은 장소별로 이 폰에 저장
+const CALC_FIELDS = [
+  ['buy', '매입가', '억', '빌라·아파트 사는 값'],
+  ['appr', '예상 감정가', '억', '종전자산 평가액. 모르면 공시가격 × 1.3~1.5로 대략'],
+  ['ratio', '비례율', '%', '조합 추정치. 모르면 100'],
+  ['sale', '조합원 분양가', '억', '받을 평형(예: 84㎡)의 조합원 분양가'],
+  ['etc', '기타 비용', '억', '취득세·중개·이주 기간 이자 등'],
+  ['jeonse', '전세 보증금', '억', '전세 끼고 사면(토허 아닌 곳만) 초기 투자에서 뺌'],
+  ['future', '입주 시 예상 시세', '억', '인근 신축 같은 평형 시세'],
+];
+function calcDefaults(n) {
+  const body = n.body;
+  const pick = re => { const m = body.match(re); return m ? parseFloat(m[1]) : ''; };
+  return {
+    ratio: pick(/비례율[^\d\n]{0,12}(\d{2,3}(?:\.\d+)?)\s*%/) || 100,
+    sale: pick(/(?:조합원|권리자)\s*분양가[^\d\n]{0,20}(\d{1,2}(?:\.\d+)?)\s*억/),
+  };
+}
+function toggleCalc(n) {
+  const old = $('#sheet-body .calc');
+  if (old) { old.remove(); return; }
+  const saved = store.get(`calc:${n.path}`, null);
+  const v = { ...calcDefaults(n), ...(saved || {}) };
+  const html = `<div class="calc card"><div class="calc-top"><b>🧮 수익 계산</b><span class="sub">단위: 억 (비례율 %). 노트에서 비례율·조합원 분양가를 찾으면 미리 채움</span></div>
+    <div class="calc-grid">${CALC_FIELDS.map(([k, label, unit, hint]) => `<label title="${esc(hint)}">${label}<span class="u">${unit}</span>
+      <input name="${k}" inputmode="decimal" value="${esc(v[k] ?? '')}" placeholder="${esc(hint)}"></label>`).join('')}</div>
+    <div class="calc-out"></div>
+    <div class="row"><button class="btn sm" data-act="calc-memo">결과를 임장 메모로 저장</button></div></div>`;
+  ($('#sheet-body .tiles') || $('#sheet-body .hero')).insertAdjacentHTML('afterend', html);
+  const box = $('#sheet-body .calc');
+  box.addEventListener('input', () => renderCalc(n));
+  renderCalc(n);
+  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+function calcValues() {
+  const box = $('#sheet-body .calc');
+  const v = {};
+  for (const [k] of CALC_FIELDS) { const x = parseFloat(box.querySelector(`[name=${k}]`).value); v[k] = Number.isFinite(x) ? x : null; }
+  return v;
+}
+function calcResult(v) {
+  if (v.buy == null) return null;
+  const right = v.appr != null ? v.appr * (v.ratio ?? 100) / 100 : null;
+  const premium = right != null ? v.buy - right : null;
+  const share = right != null && v.sale != null ? v.sale - right : null;
+  const total = v.buy + (share ?? 0) + (v.etc ?? 0);
+  const cash = v.buy - (v.jeonse ?? 0) + (v.etc ?? 0);
+  const gain = v.future != null && share != null ? v.future - total : null;
+  return { right, premium, share, total, cash, gain, rate: gain != null ? gain / total * 100 : null };
+}
+const eok = x => (x == null ? '—' : `${x < 0 ? '−' : ''}${Math.abs(x).toFixed(2).replace(/\.?0+$/, '')}억`);
+function renderCalc(n) {
+  const v = calcValues();
+  store.set(`calc:${n.path}`, v);
+  const r = calcResult(v);
+  const line = (k, val, cls = '', note = '') => `<div class="cl ${cls}"><span>${k}</span><b>${val}</b>${note ? `<small>${note}</small>` : ''}</div>`;
+  $('#sheet-body .calc-out').innerHTML = !r ? '<p class="hint">매입가부터 넣어 주세요</p>' : [
+    line('권리가액', eok(r.right), '', '감정가 × 비례율'),
+    line('프리미엄', eok(r.premium), r.premium > 0 ? 'warn' : '', '매입가 − 권리가액'),
+    line('분담금', r.share == null ? '—' : r.share < 0 ? `${eok(-r.share)} 환급` : eok(r.share), '', '조합원 분양가 − 권리가액'),
+    line('총 투자', eok(r.total), 'big', '매입가 + 분담금 + 기타'),
+    line('초기 현금', eok(r.cash), '', v.jeonse ? '매입가 − 전세 + 기타' : '매입가 + 기타'),
+    line('예상 차익', r.gain == null ? '—' : `${eok(r.gain)} (${r.rate.toFixed(0)}%)`, r.gain == null ? '' : r.gain >= 0 ? 'good' : 'bad', '입주 시 시세 − 총 투자'),
+  ].join('') + '<p class="hint">추정치 계산일 뿐 — 실제 감정가·비례율·분양가는 관리처분 때 확정. 이주비 대출·재초환·양도세는 빠져 있음</p>';
+}
+async function saveCalcMemo(n) {
+  const v = calcValues(), r = calcResult(v);
+  if (!r) { setStatus('매입가부터 넣어 주세요', true); return; }
+  const memo = `🧮 수익 계산: 매입 ${eok(v.buy)} · 감정 ${eok(v.appr)} · 비례율 ${v.ratio ?? 100}% · 조합원분양가 ${eok(v.sale)} → 권리가액 ${eok(r.right)}, 프리미엄 ${eok(r.premium)}, 분담금 ${eok(r.share)}, 총 투자 ${eok(r.total)}${r.gain != null ? `, 입주 시세 ${eok(v.future)} 기준 차익 ${eok(r.gain)}` : ''}`;
+  if (await save(n, { type: 'memo', memo, stamp: `${today()} ${nowHM()}` }, '수익 계산', '임장 메모에 저장됨')) showNote(n.name, false);
+}
+
 // 노트 본문을 ## 단위 카드로. '출처'·'참고'는 접어 둠
 function sectionize(md) {
   const kids = [...md.childNodes];
@@ -1017,6 +1235,8 @@ function showNote(name, doFocus = true) {
     n.ll && tile('🚶', '도보 길찾기', { 'data-act': 'walk' }),
     n.ll && tile('🚇', '대중교통·차', ext(`https://map.kakao.com/link/to/${q},${n.ll[0]},${n.ll[1]}`)),
     n.ll && tile('🎯', '지도에서', { 'data-act': 'focus' }),
+    n.ll && K && tile('🛣️', '로드뷰', { 'data-act': 'roadview' }),
+    n.isPlace && /재개발|재건축/.test(f.유형 || '') && tile('🧮', '수익 계산', { 'data-act': 'calc' }),
     n.isPlace && tile('🗺️', '카카오맵', ext(`https://map.kakao.com/link/search/${encodeURIComponent(f.주소 ? String(f.주소).replace(/\s*\(.*\)$/, '') : n.name)}`)),
     n.isPlace && tile('🏠', '네이버부동산', ext(`https://m.land.naver.com/search/result/${q}`)),
     n.isPlace && (f.주소 || n.ll) && tile('📜', '토지이음', { ...ext(EUM_HOME), 'data-act': 'eum' }),
@@ -1046,6 +1266,7 @@ function showNote(name, doFocus = true) {
     </div>` : ''}
     ${stageZone ? stageHtml(stageZone) : ''}
     ${n.isPlace && n.ll && (f.유형 === '재개발구역' || stageZone) ? '<div class="villa card"><p class="hint">빌라 실거래 불러오는 중…</p></div>' : ''}
+    ${n.isPlace && n.ll && /아파트|재건축|도시형|미확인/.test(f.유형 || '') ? '<div class="apt card"><p class="hint">아파트 실거래 불러오는 중…</p></div>' : ''}
     ${f.주소 ? `<div class="addr card"><span class="ic">📍</span><span class="t">${esc(f.주소)}</span><button class="copy" data-act="copy-addr" title="주소 복사">복사</button></div>` : ''}
     ${inZones.length ? `<div class="zones-in">${inZones.map(z => `<div class="zp"><i style="background:${ZONE_COLOR[z.properties.k]}"></i>${esc(zoneLabel(z))}</div>`).join('')}</div>` : ''}
     ${acts.length ? `<div class="tiles">${acts.join('')}</div>` : ''}
@@ -1058,6 +1279,7 @@ function showNote(name, doFocus = true) {
   $('#sheet').hidden = false;
   loadAtts();
   fillVillas(n);
+  fillApt(n);
   if (n.isPlace) pnuOf(n).then(pnu => {
     const a = $('#sheet-body [data-act="eum"]');
     if (a && pnu && currentNote() === n) { a.href = EUM_LAND(pnu); a.title = `토지이용계획 (PNU ${pnu})`; }
@@ -1208,6 +1430,15 @@ $('#sheet-body').onclick = async e => {
   if (act === 'focus' && n.ll) focus(n.ll);
   if (act === 'pick') startPick(n);
   if (act === 'walk') walkTo(n);
+  if (act === 'roadview') openRoadview(n);
+  if (act === 'apt-area') { aptSel.area = +e.target.closest('[data-v]').dataset.v; renderApt(); }
+  if (act === 'apt-save') {
+    const last = aptSel.tr.find(t => areaOf(t) === aptSel.area);
+    const fields = { 시세: +(last[3] / 10000).toFixed(2), 시세평형: `${aptSel.area}㎡`, 조사일: today() };
+    if (await save(n, { type: 'fields', fields }, `시세 갱신 (실거래 ${ymdOf(last[1])})`, '시세 갱신됨')) showNote(n.name, false);
+  }
+  if (act === 'calc') toggleCalc(n);
+  if (act === 'calc-memo') saveCalcMemo(n);
   if (act === 'today') { toggleToday(n); showNote(n.name, false); }
   if (act === 'villa-more') renderVillaList(Infinity);
   if (act === 'villa-band') { villaBand = e.target.closest('[data-v]').dataset.v; store.set('villaBand', villaBand); renderVillaList(); }
@@ -1660,6 +1891,8 @@ async function load() {
     if (!cfg.token && cfg.source === 'github') togglePanel('settings', true);
   } finally {
     hideSplash();
+    // 지도 라벨에 최근 실거래가를 붙이려고 조용히 받아 둠 (서비스워커가 캐시)
+    setTimeout(() => loadApts().then(() => { matchCache.clear(); drawMarkers(); }).catch(() => {}), 1500);
   }
 }
 
