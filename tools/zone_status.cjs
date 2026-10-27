@@ -1,4 +1,4 @@
-// 정비사업 정보몽땅 사업장 목록(진행단계·대표지번) → 지오코딩 → zones.json 각 구역에 단계(s)·사업장명(p) 붙이기
+// 정비사업 정보몽땅 사업장 목록(진행단계·대표지번) → 지오코딩 → zones.json 각 구역에 단계(s)·사업장명(p)·사업장 페이지 코드(u) 붙이기
 //
 //   node tools/zone_status.cjs            (Edge 또는 BROWSER=크롬 경로, 카카오 JS 키는 index.html 기본값 사용)
 //   GitHub Actions(.github/workflows/zones.yml)가 매일 돌려서 바뀐 게 있으면 커밋한다.
@@ -20,7 +20,7 @@ function parseList(html) {
   const rows = [];
   for (const tr of html.match(/<tr[\s\S]*?<\/tr>/g) || []) {
     const td = (tr.match(/<td[\s\S]*?<\/td>/g) || []).map(x => unesc(x.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim());
-    if (td.length >= 6 && /^\d+$/.test(td[0])) rows.push({ gu: td[1], kind: td[2], name: td[3], jibun: td[4], stage: td[5] });
+    if (td.length >= 6 && /^\d+$/.test(td[0])) rows.push({ gu: td[1], kind: td[2], name: td[3], jibun: td[4], stage: td[5], u: (tr.match(/cafeOpenPopup\('([^']+)'\)/) || [])[1] });
   }
   return rows;
 }
@@ -88,14 +88,14 @@ const num = s => (String(s).replace(/\s/g, '').match(/[가-힣]+(\d+(?:-\d+)?)/)
 
   const zf = path.join(ROOT, 'zones.json');
   const z = JSON.parse(fs.readFileSync(zf, 'utf8'));
-  const before = JSON.stringify(z.features.map(f => [f.properties.s, f.properties.p]));
+  const before = JSON.stringify(z.features.map(f => [f.properties.s, f.properties.p, f.properties.u]));
   let tagged = 0, byName = 0;
   // 구역 종류와 사업 구분이 맞는 것만 (재개발 구역 안의 가로주택 사업이 구역 단계를 정하지 않게)
   const compat = (k, kind) => k === '재건축' ? /재건축/.test(kind) && !/소규모/.test(kind)
     : k === '재개발' ? /재개발/.test(kind) && !/소규모/.test(kind) : k === '소규모' ? /가로|소규모/.test(kind) : true;
   const nameKey = s => (String(s).replace(/\(.*?\)/g, '').replace(/\s|제(?=\d)/g, '').match(/([가-힣]+?)(\d+(?:-\d+)?)/) || []).slice(1).join('');
   for (const f of z.features) {
-    delete f.properties.s; delete f.properties.p;
+    delete f.properties.s; delete f.properties.p; delete f.properties.u;
     if (f.properties.k === '촉진지구' || f.properties.k === '존치') continue; // 지구 전체는 단계가 하나가 아님
     const hits = rows.filter(r => r.ll && compat(f.properties.k, r.kind) && inZone(f, r.ll[0], r.ll[1]));
     if (!hits.length) continue;
@@ -104,6 +104,7 @@ const num = s => (String(s).replace(/\s/g, '').match(/[가-힣]+(\d+(?:-\d+)?)/)
       || hits.find(r => !DONE.test(r.stage)) || hits[0];
     f.properties.s = pick.stage || '단계 미상';
     f.properties.p = pick.name;
+    if (pick.u) f.properties.u = pick.u;
     tagged++;
   }
   // 위치로 못 붙인 구역: 같은 이름(동+번호) 사업장으로.
@@ -124,9 +125,10 @@ const num = s => (String(s).replace(/\s/g, '').match(/[가-힣]+(\d+(?:-\d+)?)/)
     if (!pick) continue;
     f.properties.s = pick.stage || '단계 미상';
     f.properties.p = pick.name;
+    if (pick.u) f.properties.u = pick.u;
     byName++;
   }
-  if (JSON.stringify(z.features.map(f => [f.properties.s, f.properties.p])) === before) { console.log('변경 없음'); return; }
+  if (JSON.stringify(z.features.map(f => [f.properties.s, f.properties.p, f.properties.u])) === before) { console.log('변경 없음'); return; }
   z.status = `정비사업 정보몽땅 ${new Date().toLocaleDateString('sv-SE')}`;
   fs.writeFileSync(zf, JSON.stringify(z));
   console.log('단계 붙은 구역: 위치', tagged, '+ 이름', byName, '/ 완료', z.features.filter(f => DONE.test(f.properties.s || '')).length);

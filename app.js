@@ -186,7 +186,22 @@ function newNoteText({ name, region, type, addr, ll, memo }) {
 
 // 변경은 직렬화 가능한 형태 — 오프라인 대기열에 두었다가 나중에 그때의 최신본에 다시 적용한다.
 //   {type:'fields', fields} · {type:'memo', memo, stamp}
-const applyChange = (text, c) => (c.type === 'fields' ? setFields(text, c.fields) : addMemo(text, c.memo, c.stamp));
+// 체크리스트: i번째 '- [ ]' 줄(글자가 같을 때), 못 찾으면 글자가 같은 첫 줄을 체크/해제
+const TASK = /^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\]\s*)(.*)$/;
+const taskTexts = body => body.split(/\r?\n/).map(l => l.match(TASK)).filter(Boolean).map(m => m[4].trim());
+function setTask(text, { i, text: t, done }) {
+  const lines = text.split(/\r?\n/), eol = eolOf(text);
+  const fm = text.match(/^---\r?\n[\s\S]*?\r?\n---/);
+  const from = fm ? fm[0].split(/\r?\n/).length : 0;
+  const hits = [];
+  for (let k = from; k < lines.length; k++) if (TASK.test(lines[k])) hits.push(k);
+  const same = k => lines[k].match(TASK)[4].trim() === t;
+  const at = hits[i] != null && same(hits[i]) ? hits[i] : hits.find(same);
+  if (at == null) throw new Error(`체크 항목을 못 찾음 (노트가 바뀐 듯): ${t}`);
+  lines[at] = lines[at].replace(TASK, (_, a, _c, b, rest) => `${a}${done ? 'x' : ' '}${b}${rest}`);
+  return lines.join(eol);
+}
+const applyChange = (text, c) => (c.type === 'fields' ? setFields(text, c.fields) : c.type === 'task' ? setTask(text, c) : addMemo(text, c.memo, c.stamp));
 
 // 작업: {kind:'edit', path, change, message} | {kind:'create', path, text, message} | {kind:'upload', path, data(base64), message}
 const queueKey = () => `queue:${cacheKey()}`;
@@ -482,6 +497,10 @@ $('#color-by').onclick = e => {
 syncColorBy();
 $('#filter-reset').onclick = () => { Object.values(filters).forEach(s => s.clear()); saveFilters(); refresh(); };
 
+// 추천 점수 (임장 추천 에이전트가 frontmatter '점수:'에 씀, 100점 만점)
+const scoreOf = n => { const v = parseFloat(n.fm.점수); return Number.isFinite(v) ? v : null; };
+const scoreColor = v => (v >= 75 ? RATING_COLOR['1순위'] : v >= 60 ? RATING_COLOR.추천 : v >= 45 ? RATING_COLOR.후보 : RATING_COLOR.탈락);
+
 function drawList() {
   const q = $('#search').value.trim().toLowerCase();
   const hit = n => !q || n.name.toLowerCase().includes(q) || String(n.fm.주소 || '').toLowerCase().includes(q);
@@ -491,15 +510,20 @@ function drawList() {
   const price = n => parseFloat(n.fm.시세) || null;
   const byName_ = (a, b) => a.name.localeCompare(b.name, 'ko');
   const cmp = {
+    점수: (a, b) => ((scoreOf(b) ?? -1) - (scoreOf(a) ?? -1)) || (order[a.rating] - order[b.rating]) || byName_(a, b), // 점수 없는 곳은 뒤로
     평가: (a, b) => (order[a.rating] - order[b.rating]) || byName_(a, b),
     저가: (a, b) => ((price(a) ?? 1e9) - (price(b) ?? 1e9)) || byName_(a, b), // 시세 없는 곳은 뒤로
     고가: (a, b) => ((price(b) ?? -1) - (price(a) ?? -1)) || byName_(a, b),
     이름: byName_,
   }[listSort] || byName_;
   const inToday = todayList.filter(nm => byName.get(nm));
+  const rank = listSort === '점수' ? shown.filter(n => scoreOf(n) != null).sort(cmp) : [];
   $('#list-body').innerHTML = (inToday.length ? `<div class="today card"><div class="today-top"><b>🚩 오늘 동선 ${inToday.length}곳</b>
       <button class="btn sm primary" data-today="go">동선 보기</button><button class="btn sm" data-today="clear">비우기</button></div>
       <div class="today-list">${inToday.map((nm, k) => `<a href="#" data-note="${esc(nm)}">${k + 1}. ${esc(nm)}</a>`).join('')}</div></div>` : '')
+  + (rank.length ? `<div class="rank card"><b>🏆 추천 순위 <span class="n">서울 전체 · 점수 있는 ${rank.length}곳</span></b>
+      ${rank.map((n, k) => `<button class="rk" data-note="${esc(n.name)}"><span class="no">${k + 1}</span><span class="nm">${esc(n.name)}<small>${esc([n.region, n.fm.시세 && `${n.fm.시세}억`].filter(Boolean).join(' · '))}</small></span>
+        <span class="score" style="--c:${scoreColor(scoreOf(n))}">${scoreOf(n)}점</span></button>`).join('')}</div>` : '')
   + regions.map(r => {
     const items = shown.filter(n => n.region === r).sort(cmp);
     const mocs = notes.filter(n => n.isMoc && n.region === r);
@@ -507,7 +531,7 @@ function drawList() {
       ${routes[r]?.length ? `<button class="btn sm" data-route="${esc(r)}">동선 ${routes[r].length}곳</button>` : ''}</h3>
       ${mocs.length ? `<div class="mocs">${mocs.map(m => `<a href="#" data-note="${esc(m.name)}">${esc(m.name)}</a>`).join('')}</div>` : ''}
       ${items.map(n => `<button class="item" data-note="${esc(n.name)}"><span class="item-ic">${pinHtml(n)}</span>
-        <span class="name">${esc(n.name)}<span class="sub">${esc([n.fm.유형, n.fm.상태, n.rating !== '미평가' && n.rating].filter(Boolean).join(' · '))}</span>
+        <span class="name">${esc(n.name)}${scoreOf(n) != null ? `<span class="score" style="--c:${scoreColor(scoreOf(n))}">${scoreOf(n)}점</span>` : ''}<span class="sub">${esc([n.fm.유형, n.fm.상태, n.rating !== '미평가' && n.rating].filter(Boolean).join(' · '))}</span>
           ${queue.some(o => o.path === n.path) ? '<span class="tag">대기</span>' : ''}${n.ll ? '' : '<span class="tag warn">좌표 없음</span>'}${apts && hasNewTrade(n) ? '<span class="tag new">새 거래</span>' : ''}</span>
         <span class="item-price"${n.fm.시세 ? ` style="--c:${PRICE_COLOR[priceBand(n.fm.시세)]}"` : ''}>${n.fm.시세 ? `${esc(n.fm.시세)}<small>억</small>` : '<small>—</small>'}</span></button>`).join('')}</div>`;
   }).join('') || '<p class="hint">조건에 맞는 장소가 없습니다.</p>';
@@ -716,12 +740,66 @@ const zoneLabel = f => [f.properties.n || '(이름 없음)', ZONE_CODE[f.propert
 
 let popup = null;
 function closePopup() { popup?.setMap(null); popup = null; }
+// 구역 상세: 단계 막대 · 추진경과(zone_history.json, 매일 갱신) · 정비사업 정보몽땅 사업장 · 이 구역 노트 · 임장지로 추가
+let zoneHist = null, zoneHistLoading = null;
+function loadZoneHist() {
+  zoneHistLoading ||= fetch('zone_history.json').then(r => (r.ok ? r.json() : Promise.reject(new Error(`추진경과 자료 실패 (${r.status})`))))
+    .then(j => (zoneHist = j)).catch(e => { zoneHistLoading = null; throw e; });
+  return zoneHistLoading;
+}
+const CAFE = u => `https://cleanup.seoul.go.kr/cafe/mainIndx.do?cafeUrl=${encodeURIComponent(u)}`;
+const HIST_SHORT = { 조합설립추진위원회승인: '추진위 승인', 정비사업전문관리업자선정: '정비업체 선정', 정비구역지정: '구역 지정' };
+const ymdDot = d => d.slice(2).replace(/-/g, '.');
+function zoneCard(f, k) {
+  const p = f.properties, i = stageStep(p.s);
+  const inNotes = places().filter(n => n.ll && inZone(f, n.ll));
+  const hist = p.u && zoneHist?.z?.[p.u];
+  return `<div class="zcard">
+    <div class="zc-top"><i style="background:${ZONE_COLOR[p.k]}"></i><b>${esc(p.n || '(이름 없음)')}</b></div>
+    <div class="zc-sub">${esc([ZONE_CODE[p.c] || p.k, zoneStage(f)].filter(Boolean).join(' · '))}</div>
+    ${i >= 0 && zoneState(f) === 'active' ? `<div class="steps sm">${STAGE_STEPS.map((t, k) => `<div class="st${k < i ? ' done' : k === i ? ' cur' : ''}"><i></i><span>${t}</span></div>`).join('')}</div>` : ''}
+    ${hist?.length ? `<div class="zhist">${hist.map(([s, a, b]) => `<div><span>${ymdDot(a)}</span>${esc(HIST_SHORT[s] || s)}${b ? `<small>변경 ${ymdDot(b)}</small>` : ''}</div>`).join('')}</div>`
+      : p.u && !zoneHist ? '<div class="zhist hint">추진경과 불러오는 중…</div>' : ''}
+    ${inNotes.length ? `<div class="zc-notes">${inNotes.map(n => `<a href="#" data-znote="${esc(n.name)}">📍 ${esc(n.name)}</a>`).join('')}</div>` : ''}
+    <div class="zc-acts">
+      ${p.u ? `<a class="btn sm" href="${CAFE(p.u)}" target="_blank" rel="noopener" title="${esc(p.p || '')}">정비사업 정보몽땅</a>` : ''}
+      <button class="btn sm" data-zadd="${k}">＋ 임장지로</button>
+    </div></div>`;
+}
 function zonePopup(ll) {
   closePopup();
-  const hit = zonesAt(ll).filter(zoneVisible);
+  const hit = zonesAt(ll).filter(zoneVisible).sort((a, b) => (zoneState(a) === 'district') - (zoneState(b) === 'district'));
   if (!hit.length) return;
-  popup = overlay(ll, `<div class="zpop">${hit.map(f => `<div class="zp"><i style="background:${ZONE_COLOR[f.properties.k]}"></i>${esc(zoneLabel(f))}</div>`).join('')}</div>`,
-    { y: 1, z: 10, clickable: true });
+  const el = Object.assign(document.createElement('div'), { className: 'zpop' });
+  const draw = () => { el.innerHTML = `<button class="zx" data-zx title="닫기">✕</button>${hit.map(zoneCard).join('')}`; };
+  draw();
+  if (!zoneHist && hit.some(f => f.properties.u)) loadZoneHist().then(() => { if (el.isConnected) draw(); }).catch(() => {});
+  el.onclick = e => {
+    e.stopPropagation();
+    if (e.target.closest('[data-zx]')) { closePopup(); return; }
+    const nt = e.target.closest('[data-znote]');
+    if (nt) { e.preventDefault(); closePopup(); nav(nt.dataset.znote); return; }
+    const add = e.target.closest('[data-zadd]');
+    if (add) {
+      closePopup();
+      openNew(ll);
+      const f = hit[+add.dataset.zadd], nm = f.properties.n || f.properties.p || '';
+      // '노량진3 재정비촉진구역' → '노량진3구역' (이름은 새 장소 창에서 고칠 수 있음)
+      const short = nm.replace(/\(.*?\)/g, '').replace(/\s*(재정비촉진|주택재개발|주택재건축|재개발|재건축|도시정비형|도시환경정비|주거환경개선)\s*/g, ' ')
+        .replace(/\s*(정비사업|정비구역|촉진구역|구역|지구|조합).*$/, '').replace(/\s+/g, ' ').trim();
+      const fm = $('#new-form');
+      fm.elements.name.value = short ? (/\d$/.test(short) ? `${short}구역` : short) : nm;
+      fm.elements.type.value = f.properties.k === '재건축' ? '재건축' : '재개발구역';
+    }
+  };
+  for (const ev of ['touchstart', 'mousedown', 'wheel']) el.addEventListener(ev, e => e.stopPropagation(), { passive: true });
+  popup = overlay(ll, el, { y: 1, z: 10, clickable: true });
+  // 팝업이 누른 점 위로 열리므로, 위쪽 공간이 모자라면 그 점이 화면 아래쪽(80%)에 오게 지도를 옮긴다
+  requestAnimationFrame(() => {
+    const proj = map.getProjection(), p = proj.containerPointFromCoords(LL(ll));
+    const need = el.offsetHeight + 70; // 위 툴바 몫
+    if (p.y < need) map.panTo(proj.coordsFromContainerPoint(new K.Point(p.x, p.y - (Math.min(mapEl.clientHeight * 0.8, need + 20) - p.y))));
+  });
 }
 
 async function setZones(on) {
@@ -1476,6 +1554,7 @@ function showNote(name, doFocus = true) {
     ${n.isPlace ? `<div class="pills">
       ${f.상태 ? `<span class="pill" style="--c:${STATUS_COLOR[f.상태] || '#80868b'}">${f.상태 === '다녀옴' ? '✓ ' : ''}${esc(f.상태)}</span>` : ''}
       <span class="pill" style="--c:${RATING_COLOR[n.rating] || RATING_COLOR.미평가}">${n.rating === '1순위' ? '★ ' : ''}${esc(n.rating)}</span>
+      ${scoreOf(n) != null ? `<span class="pill" style="--c:${scoreColor(scoreOf(n))}" title="임장 추천 점수 (100점 만점)">추천 ${scoreOf(n)}점</span>` : ''}
       ${!n.ll ? '<span class="pill warn">좌표 없음</span>' : ''}${queue.some(o => o.path === n.path) ? '<span class="pill warn">저장 대기</span>' : ''}
       ${n.error ? '<span class="pill warn">frontmatter 오류</span>' : ''}</div>` : ''}
     ${n.isPlace ? `<div class="price card">
@@ -1495,6 +1574,7 @@ function showNote(name, doFocus = true) {
     ${n.isPlace ? editHtml(n) : ''}
     <div class="md">${renderMd(body, n.name)}</div>`;
   sectionize($('#sheet-body .md'));
+  if (n.isPlace) wireTasks(n);
   if (doFocus) $('#sheet-body').scrollTop = 0;
   $('#sheet-body').querySelectorAll('.md a[href^="http"]').forEach(a => { a.target = '_blank'; a.rel = 'noopener'; });
   $('#sheet').hidden = false;
@@ -1507,6 +1587,36 @@ function showNote(name, doFocus = true) {
     if (a && pnu && currentNote() === n) { a.href = EUM_LAND(pnu); a.title = `토지이용계획 (PNU ${pnu})`; }
   });
   if (n.ll && doFocus) focus(n.ll);
+}
+
+// 노트 체크리스트('- [ ]')를 눌러서 바로 저장. 상자 수가 본문 줄 수와 다르면(코드 블록 등) 안 건드림
+function wireTasks(n) {
+  const boxes = [...$('#sheet-body .md').querySelectorAll('input[type=checkbox]')];
+  const texts = taskTexts(n.body);
+  if (!boxes.length || boxes.length !== texts.length) return;
+  const count = sec => {
+    const bs = [...sec.querySelectorAll('input[type=checkbox]')], sm = sec.querySelector('summary');
+    if (!sm || !bs.length) return;
+    sm.querySelector('.tcount')?.remove();
+    sm.insertAdjacentHTML('beforeend', ` <span class="tcount${bs.every(b => b.checked) ? ' all' : ''}">${bs.filter(b => b.checked).length}/${bs.length}</span>`);
+  };
+  boxes.forEach((b, i) => {
+    b.disabled = false;
+    const li = b.closest('li');
+    li?.classList.add('task');
+    li?.classList.toggle('done', b.checked);
+    b.onchange = async () => {
+      const done = b.checked;
+      b.disabled = true;
+      li?.classList.toggle('done', done);
+      const ok = await save(n, { type: 'task', i, text: texts[i], done }, `체크 ${done ? '✓' : '☐'} ${texts[i]}`, done ? '체크 저장됨' : '체크 해제 저장됨');
+      if (!ok) { b.checked = !done; li?.classList.toggle('done', !done); }
+      b.disabled = false;
+      const sec = b.closest('.sec');
+      if (sec) count(sec);
+    };
+  });
+  for (const sec of new Set(boxes.map(b => b.closest('.sec')).filter(Boolean))) count(sec);
 }
 
 // ---------- 토지이음: 노트 주소(없으면 좌표)의 지번 → PNU 19자리 → 그 필지의 토지이용계획 화면 ----------
@@ -2075,7 +2185,7 @@ function render(info, doRoute = true) {
 function drawInfo() {
   const ps = places();
   const errs = notes.filter(n => n.error);
-  const desc = op => op.kind === 'create' ? '새 노트' : op.kind === 'upload' ? '사진 (원본은 폰 갤러리에 있음)' : op.change.type === 'memo' ? `메모: ${op.change.memo}` : JSON.stringify(op.change.fields);
+  const desc = op => op.kind === 'create' ? '새 노트' : op.kind === 'upload' ? '사진 (원본은 폰 갤러리에 있음)' : op.change.type === 'memo' ? `메모: ${op.change.memo}` : op.change.type === 'task' ? `체크 ${op.change.done ? '✓' : '☐'} ${op.change.text}` : JSON.stringify(op.change.fields);
   $('#load-info').innerHTML = `${esc(loadInfo)}<br>노트 ${notes.length} · 장소 ${ps.length} · 좌표 없음 ${ps.filter(n => !n.ll).length}`
     + (queue.length ? `<br><b>저장 대기 ${queue.length}건</b> — 연결되면 자동 전송 <button type="button" class="btn sm" id="flush-now">지금 보내기</button>` : '')
     + (errs.length ? `<br>frontmatter 오류: ${errs.map(n => esc(n.path)).join(', ')}` : '')

@@ -1,7 +1,7 @@
 // 서비스워커: 앱 화면과 라이브러리(카카오맵 SDK 포함)는 캐시 우선 + 백그라운드 갱신.
 // 카카오 지도 타일은 CORS 헤더가 없어(opaque) 여기서 캐시하지 않고 브라우저 HTTP 캐시(6시간)에 맡긴다.
 // 노트 데이터(GitHub API, /local/)는 건드리지 않음 — 앱이 직접 캐시·대기열 처리.
-const SHELL = 'shell-v21';
+const SHELL = 'shell-v22';
 const SHELL_FILES = [
   './', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png',
   'https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js',

@@ -476,3 +476,39 @@ body.measuring #map { cursor: crosshair; }
 .cmp td.best { background: color-mix(in srgb, #188038 12%, transparent); font-weight: 700; }
 .cmp .up { color: #d93025; } .cmp .down { color: #1a73e8; }
 .cmp-x { position: absolute; top: 5px; right: 3px; border: 0; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
+
+/* 추천 점수 */
+.item .score { --c: #80868b; align-self: flex-start; order: 2; margin-top: 4px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 800; color: #fff; background: var(--c); vertical-align: 1px; }
+
+/* 체크리스트 (앱에서 눌러 저장) */
+.md li.task { list-style: none; margin-left: -1.2em; padding: 4px 0; }
+.md li.task input[type=checkbox] { width: 18px; height: 18px; vertical-align: -3px; margin-right: 8px; cursor: pointer; }
+.md li.task.done { color: var(--muted); text-decoration: line-through; }
+.tcount { margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; background: var(--card-line); color: var(--muted); }
+.tcount.all { background: #188038; color: #fff; }
+
+/* 구역 상세 */
+.zpop { position: relative; width: 290px; max-width: calc(100vw - 32px); max-height: 46vh; overflow-y: auto; padding: 10px 12px; }
+.zpop .zx { position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; border: 0; border-radius: 50%; background: #f1f3f4; color: #5f6368; font-size: 13px; cursor: pointer; }
+.zcard + .zcard { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e5e7eb; }
+.zc-top { display: flex; align-items: center; gap: 6px; padding-right: 26px; font-size: 14px; line-height: 1.35; }
+.zc-top i { flex: none; width: 12px; height: 12px; border-radius: 3px; opacity: .85; }
+.zc-sub { margin: 2px 0 0 18px; font-size: 12px; color: #5f6368; }
+.zpop .steps.sm { margin: 10px 0 4px; }
+.zpop .steps.sm .st { font-size: 9px; color: #5f6368; }
+.zhist { margin-top: 8px; padding: 6px 8px; border-radius: 8px; background: #f8f9fa; font-size: 12px; line-height: 1.7; }
+.zhist span { display: inline-block; width: 64px; color: #5f6368; font-variant-numeric: tabular-nums; }
+.zhist small { margin-left: 6px; color: #9aa0a6; }
+.zc-notes { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 8px; font-size: 12px; }
+.zc-notes a { color: #1a73e8; text-decoration: none; }
+.zc-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.zc-acts .btn { text-decoration: none; }
+.rank { margin-bottom: 12px; }
+.rank > b { display: block; margin-bottom: 6px; font-size: 14px; }
+.rank .n { font-weight: 400; font-size: 12px; color: var(--muted); }
+.rk { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 2px; border: 0; border-top: 1px solid var(--card-line); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.rk .no { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; background: var(--card-line); }
+.rk:nth-of-type(-n+3) .no { background: #f9ab00; color: #fff; }
+.rk .nm { flex: 1; font-size: 14px; }
+.rk .nm small { display: block; font-size: 11px; color: var(--muted); }
+.rk .score { --c: #80868b; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 800; color: #fff; background: var(--c); }

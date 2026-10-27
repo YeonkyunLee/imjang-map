@@ -1,6 +1,6 @@
 name: 정비구역 단계·빌라·아파트 실거래 갱신
 
-# 매일 아침 정비사업 정보몽땅의 진행 단계(zones.json)와 서울부동산정보광장 빌라·아파트 실거래·아파트 전세(villas.json, apts.json)를 갱신. 바뀐 게 있을 때만 커밋하고 Pages를 다시 빌드한다.
+# 매일 아침 정비사업 정보몽땅의 진행 단계(zones.json)·추진경과(zone_history.json)와 서울부동산정보광장 빌라·아파트 실거래·아파트 전세(villas.json, apts.json)를 갱신. 바뀐 게 있을 때만 커밋하고 Pages를 다시 빌드한다.
 on:
   schedule:
     - cron: '30 21 * * *' # 매일 06:30 KST
@@ -25,6 +25,9 @@ jobs:
         env:
           BROWSER: google-chrome
         run: node tools/zone_status.cjs
+      - name: 추진경과 갱신
+        continue-on-error: true
+        run: node tools/zone_history.cjs
       - name: 빌라 실거래 갱신
         env:
           BROWSER: google-chrome
@@ -40,10 +43,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if git diff --quiet -- zones.json villas.json apts.json tools/geocache.json tools/pnucache.json; then echo "변경 없음"; exit 0; fi
+          if git diff --quiet -- zones.json zone_history.json villas.json apts.json tools/geocache.json tools/pnucache.json; then echo "변경 없음"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add zones.json villas.json apts.json tools/geocache.json tools/pnucache.json
+          git add zones.json zone_history.json villas.json apts.json tools/geocache.json tools/pnucache.json
           git commit -m "정비구역 단계·실거래 자동 갱신 $(TZ=Asia/Seoul date +%F)"
           git pull --rebase
           git push
