@@ -460,6 +460,35 @@ for (const sel of Object.values(panels)) {
   });
   el.addEventListener('touchcancel', () => { s = null; el.style.transition = el.style.transform = ''; });
 }
+// 화면 왼쪽 끝에서 오른쪽으로 밀어서 목록(☰) 열기. 왼쪽 끝 얇은 띠(#edge-swipe)가 손가락을 받아 지도가 같이 끌리지 않게 함
+{
+  const edge = $('#edge-swipe'), el = $(panels.list);
+  let s = null;
+  const reset = () => { el.style.transition = el.style.transform = ''; };
+  edge.addEventListener('touchstart', e => {
+    const t = e.touches[0];
+    s = e.touches.length === 1 && !picking && !measure ? { x: t.clientX, y: t.clientY, dx: 0, h: null } : null;
+  }, { passive: true });
+  edge.addEventListener('touchmove', e => {
+    if (!s) return;
+    const t = e.touches[0];
+    s.dx = t.clientX - s.x;
+    s.h ??= Math.abs(s.dx) > 8 || Math.abs(t.clientY - s.y) > 8 ? s.dx > Math.abs(t.clientY - s.y) : null;
+    if (!s.h) return;
+    if (el.hidden) { togglePanel(null); el.hidden = false; }
+    el.style.transition = 'none';
+    el.style.transform = `translateX(${Math.min(0, s.dx - el.offsetWidth)}px)`;
+  }, { passive: true });
+  edge.addEventListener('touchend', () => {
+    if (!s) return;
+    const open = s.h && s.dx > 80;
+    const was = s.h;
+    s = null;
+    reset();
+    if (open) { el.hidden = true; togglePanel('list', true); } else if (was) el.hidden = true;
+  });
+  edge.addEventListener('touchcancel', () => { if (s?.h) el.hidden = true; s = null; reset(); });
+}
 function mapClick(ll) {
   if (Date.now() - longPressAt < 800) return; // 길게 누른 손을 뗄 때 오는 클릭
   if (picking) { pickAt(ll); return; }

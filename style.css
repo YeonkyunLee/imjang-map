@@ -515,3 +515,8 @@ body.measuring #map { cursor: crosshair; }
 /* 작성 중인 새 장소가 있을 때 ＋ 버튼 → 이어서 */
 #btn-add.draft { display: flex; flex-direction: column; align-items: center; line-height: 1.15; padding: 8px 16px; background: #e8710a; }
 #btn-add.draft small { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 500; opacity: .9; }
+/* 왼쪽 끝에서 밀어 목록 열기 (터치 화면만) */
+#edge-swipe { display: none; position: fixed; left: 0; top: calc(52px + env(safe-area-inset-top)); bottom: calc(90px + env(safe-area-inset-bottom)); width: 16px; z-index: 850; touch-action: none; }
+html, body { overscroll-behavior-x: none; }
+@media (pointer: coarse) { #edge-swipe { display: block; } }
+.picking #edge-swipe { display: none; }
