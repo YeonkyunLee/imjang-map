@@ -782,7 +782,7 @@ function zonePopup(ll) {
     const add = e.target.closest('[data-zadd]');
     if (add) {
       closePopup();
-      openNew(ll);
+      openNew(ll, { fresh: true });
       const f = hit[+add.dataset.zadd], nm = f.properties.n || f.properties.p || '';
       // '노량진3 재정비촉진구역' → '노량진3구역' (이름은 새 장소 창에서 고칠 수 있음)
       const short = nm.replace(/\(.*?\)/g, '').replace(/\s*(재정비촉진|주택재개발|주택재건축|재개발|재건축|도시정비형|도시환경정비|주거환경개선)\s*/g, ' ')
@@ -1885,9 +1885,39 @@ if (map) {
     if (!e.target.closest('.pin-wrap, .zpop')) longPress(e.clientX, e.clientY);
   });
 }
-// 새 장소: ＋ 버튼(검색·지도에서 찍기·현재 위치) 또는 지도 길게 누르기
-function openNew(ll = null) {
+// 작성 중인 새 장소: 패널을 닫아도(지도로 위치 확인 등) 남겨 두고, ＋ 버튼이 "이어서"로 바뀌어 다시 연다.
+// 앱을 껐다 켜도 남도록 저장. 취소하거나 추가하면 지운다.
+let newDraft = store.get('newDraft', null); // { name, region, type, addr, memo, q, ll }
+function saveDraft() {
+  const e = $('#new-form').elements;
+  const d = { name: e.name.value, region: e.region.value, type: e.type.value, addr: e.addr.value, memo: e.memo.value, q: $('#new-q').value, ll: newLL };
+  newDraft = d.name.trim() || d.ll || d.addr.trim() || d.memo.trim() ? d : null;
+  store.set('newDraft', newDraft);
+  syncAddBtn();
+}
+function dropDraft() {
+  newDraft = null;
+  newLL = null;
+  store.set('newDraft', null);
+  clear(newObjs);
+  syncAddBtn();
+}
+function syncAddBtn() {
+  const b = $('#btn-add');
+  b.classList.toggle('draft', !!newDraft);
+  b.title = newDraft ? '작성 중인 장소 이어서 쓰기' : '임장할 곳 추가';
+  b.innerHTML = newDraft ? `✏️ 이어서<small>${esc(newDraft.name.trim() || '새 장소')}</small>` : '＋ 추가';
+}
+// 새 장소: ＋ 버튼(검색·지도에서 찍기·현재 위치) 또는 지도 길게 누르기. fresh면 작성 중인 것을 버리고 새로
+function openNew(ll = null, { fresh = false } = {}) {
   if (picking) return;
+  $('#region-list').innerHTML = (FILTERS.지역 || []).map(r => `<option value="${esc(r)}">`).join('');
+  if (newDraft && !fresh) {
+    togglePanel('new', true);
+    if (ll) { $('#new-form').elements.addr.value = ''; setNewLL(ll); } // 길게 누르기 → 작성 중인 장소의 위치만 바꿈
+    else if (newLL && map) focusNew(newLL);
+    return;
+  }
   const f = $('#new-form');
   f.reset();
   newLL = null;
@@ -1895,10 +1925,18 @@ function openNew(ll = null) {
   $('#new-results').innerHTML = '';
   const cur = currentNote();
   f.elements.region.value = cur?.region || [...filters.지역][0] || '';
-  $('#region-list').innerHTML = FILTERS.지역.map(r => `<option value="${esc(r)}">`).join('');
   togglePanel('new', true);
-  if (ll) setNewLL(ll); else { syncNewLL(); $('#new-q').focus(); }
+  if (ll) setNewLL(ll); else { syncNewLL(); saveDraft(); $('#new-q').focus(); }
 }
+// 저장해 둔 작성 중 장소 되살리기 (앱 시작 시)
+if (newDraft) {
+  const e = $('#new-form').elements;
+  for (const k of ['name', 'region', 'type', 'addr', 'memo']) if (newDraft[k] != null) e[k].value = newDraft[k];
+  $('#new-q').value = newDraft.q || '';
+  newLL = newDraft.ll || null;
+}
+$('#new-form').addEventListener('input', saveDraft);
+$('#new-form').addEventListener('change', saveDraft);
 let newObjs = [];
 function syncNewLL() {
   $('#new-ll').textContent = newLL ? `위치 ${fmtLL(newLL)}` : '위치 미지정 — 검색에서 고르거나 "지도에서 찍기"·"현재 위치" (비워 두고 나중에 지정해도 됨)';
@@ -1911,7 +1949,7 @@ async function setNewLL(ll, { addr } = {}) {
   syncNewLL();
   if (map) { if (map.getLevel() > 4) map.setLevel(4); focusNew(ll); }
   const f = $('#new-form').elements;
-  const near = FILTERS.지역.map(r => [r, regionCenter(r)]).filter(([, c]) => c).map(([r, c]) => [r, distKm(ll, c)]).sort((a, b) => a[1] - b[1])[0];
+  const near = (FILTERS.지역 || []).map(r => [r, regionCenter(r)]).filter(([, c]) => c).map(([r, c]) => [r, distKm(ll, c)]).sort((a, b) => a[1] - b[1])[0];
   if (near && near[1] < 3) f.region.value = near[0];
   if (addr) f.addr.value = addr;
   else if (!f.addr.value && window.kakao?.maps?.services) {
@@ -1921,8 +1959,10 @@ async function setNewLL(ll, { addr } = {}) {
       const a = res[0];
       f.addr.value = a.road_address ? `${a.road_address.address_name.replace(/^서울(특별시)?\s*/, '')} (${a.address.address_name.split(' ').slice(-2).join(' ')})`
         : a.address.address_name.replace(/^서울(특별시)?\s*/, '');
+      saveDraft();
     });
   }
+  saveDraft();
 }
 // 패널(왼쪽)·위쪽 바에 가리지 않게 살짝 비켜서 보여줌
 function focusNew(ll) {
@@ -1979,7 +2019,10 @@ $('#new-here').onclick = async () => {
   catch (e) { setStatus(e.message, true); }
 };
 $('#btn-add').onclick = () => openNew();
-$('#new-cancel').onclick = () => { clear(newObjs); togglePanel(null); };
+$('#new-cancel').onclick = () => { dropDraft(); togglePanel(null); };
+$('#new-q').addEventListener('input', saveDraft);
+syncAddBtn();
+if (newDraft) syncNewLL();
 $('#new-form').onsubmit = async e => {
   e.preventDefault();
   const el = e.target.elements;
@@ -1992,7 +2035,7 @@ $('#new-form').onsubmit = async e => {
   try {
     const text = newNoteText({ name, region, type: el.type.value, addr: el.addr.value.trim(), ll: newLL, memo: el.memo.value });
     const r = await submit({ kind: 'create', path: `${region}/${name}.md`, text, message: `${appTag()}: ${name} 추가` });
-    clear(newObjs);
+    dropDraft();
     togglePanel(null);
     setStatus(r === 'queued' ? QUEUED_MSG : '추가됨');
     nav(name);
